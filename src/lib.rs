@@ -1,32 +1,30 @@
 #![allow(dead_code)]
-use std::{collections::HashMap, hash::Hash, ops::Index, ptr::NonNull};
+use std::{cell::RefCell, collections::HashMap, hash::Hash, ops::Index, rc::Rc};
 
 #[derive(Debug)]
 pub struct Rete {
-    alpha_tests: HashMap<AlphaTest, AlphaMemoryNode>,
+    alpha_tests: HashMap<AlphaTest, Rc<RefCell<AlphaMemoryNode>>>,
     alpha_network: HashMap<ConstantTestNode, AlphaMemoryNode>,
 
-    dummy_top_token: *mut Token,
-    dummy_top_node: *mut Node,
+    dummy_top_token: Rc<RefCell<Token>>,
+    dummy_top_node: Rc<RefCell<Node>>,
 
-    wme_alpha_memories: HashMap<Wme, Vec<NonNull<AlphaMemoryNode>>>,
+    wme_alpha_memories: HashMap<Wme, Vec<Rc<RefCell<AlphaMemoryNode>>>>,
 
     productions: HashMap<usize, Production>,
 }
 
 impl Rete {
-    unsafe fn new() -> Self {
+    fn new() -> Self {
         let dummy_top_node = BetaMemoryNode {
             parent: None,
             children: vec![],
             beta_memory: vec![],
         };
 
-        let dummy_top_node = &mut Node::Beta(dummy_top_node) as *mut _;
+        let dummy_top_node = Rc::new(RefCell::new(Node::Beta(dummy_top_node)));
 
-        dbg!((&mut *dummy_top_node as *mut Node).is_null());
-
-        let mut dummy_top_token = Token {
+        let dummy_top_token = Token {
             parent: None,
             wme: Wme {
                 id: 0,
@@ -34,9 +32,11 @@ impl Rete {
                 alpha_mem_items: vec![],
                 tokens: vec![],
             },
-            node: dummy_top_node,
+            node: dummy_top_node.clone(),
             children: vec![],
         };
+
+        let dummy_top_token = Rc::new(RefCell::new(dummy_top_token));
 
         Self {
             alpha_tests: HashMap::new(),
@@ -44,57 +44,63 @@ impl Rete {
             wme_alpha_memories: HashMap::new(),
             productions: HashMap::new(),
             dummy_top_node,
-            dummy_top_token: &mut dummy_top_token as *mut _,
+            dummy_top_token,
         }
     }
 
-    unsafe fn add_wme(&mut self, wme: Wme) {
+    fn add_wme(&mut self, wme: Wme) {
         for element in wme.permutations() {
-            let Some(ref mut memory) = self.alpha_tests.get_mut(&element) else { continue };
-            memory.activate(wme.clone())
+            let Some(memory) = self.alpha_tests.get(&element) else { continue };
+            activate(memory, wme.clone())
         }
     }
 
-    unsafe fn build_or_share_alpha_memory_node(
+    fn build_or_share_alpha_memory_node(
         &mut self,
         condition: &Condition,
-    ) -> *mut AlphaMemoryNode {
+    ) -> Rc<RefCell<AlphaMemoryNode>> {
         // let constant_tests = condition.constants();
         let alpha_test = AlphaTest::from(*condition);
-        if self.alpha_tests.contains_key(&alpha_test) {
-            return self.alpha_tests.get_mut(&alpha_test).unwrap() as *mut _;
+
+        if let Some(test) = self.alpha_tests.get(&alpha_test) {
+            return test.clone();
         }
+
+        self.wme_alpha_memories.iter_mut().for_each(|(wme, a_mem)| {
+            if alpha_test.matches(wme) {
+                a_mem.iter().for_each(|mem| activate(mem, wme.clone()))
+            }
+        });
+
         let am = AlphaMemoryNode {
             items: vec![],
             successors: vec![],
         };
-        self.wme_alpha_memories.iter_mut().for_each(|(wme, a_mem)| {
-            if alpha_test.matches(wme) {
-                a_mem
-                    .iter_mut()
-                    .for_each(|mem| mem.as_mut().activate(wme.clone()))
-            }
-        });
-        self.alpha_tests.insert(alpha_test, am);
-        self.alpha_tests.get_mut(&alpha_test).unwrap() as *mut _
+
+        let am = Rc::new(RefCell::new(am));
+
+        self.alpha_tests.insert(alpha_test, am.clone());
+
+        am
     }
 
-    unsafe fn add_production(&mut self, production: Production) {
+    fn add_production(&mut self, production: Production) {
         let conditions = &production.conditions;
-        assert!(conditions.len() > 0, "LHS of production cannot be empty");
 
-        let mut current_node = self.dummy_top_node;
+        assert!(!conditions.is_empty(), "LHS of production cannot be empty");
+
+        let mut current_node = self.dummy_top_node.clone();
 
         let mut earlier_conds = vec![];
 
         let mut tests = get_join_tests_from_condition(&conditions[0], &earlier_conds);
         let mut alpha_memory = self.build_or_share_alpha_memory_node(&conditions[0]);
 
-        current_node = build_or_share_join_node(current_node, alpha_memory, &tests);
+        current_node = build_or_share_join_node(&current_node, alpha_memory, &tests);
 
         for i in 1..conditions.len() {
             // Get the beta memory node Mi
-            current_node = build_or_share_beta_memory_node(current_node);
+            current_node = build_or_share_beta_memory_node(&current_node);
 
             // Get the join node Ji for conition Ci
             earlier_conds.push(conditions[i - 1]);
@@ -102,34 +108,32 @@ impl Rete {
             tests = get_join_tests_from_condition(&conditions[i], &earlier_conds);
             alpha_memory = self.build_or_share_alpha_memory_node(&conditions[i]);
 
-            current_node = build_or_share_join_node(current_node, alpha_memory, &tests);
+            current_node = build_or_share_join_node(&current_node, alpha_memory, &tests);
         }
 
         let production = ProductionNode {
             tokens: vec![],
-            parent: current_node,
+            parent: current_node.clone(),
             production,
         };
 
-        let mut production = &mut Node::Production(production) as *mut _;
+        let production = Rc::new(RefCell::new(Node::Production(production)));
 
-        (&mut *current_node).add_child(production);
+        current_node.borrow_mut().add_child(production.clone());
 
         // Update the new node with matches from above via the current node which just became the production's parent
-        match current_node.as_mut().unwrap() {
-            Node::Beta(beta) => beta.beta_memory.iter_mut().for_each(|token| {
-                activate_left(production.as_mut().unwrap(), token, token.wme.clone())
-            }),
-            Node::Join(join) => {
+        match current_node.borrow_mut().to_owned() {
+            Node::Beta(beta) => beta
+                .beta_memory
+                .iter()
+                .for_each(|token| activate_left(&production, token, token.borrow().wme.clone())),
+            Node::Join(mut join) => {
                 join.children.push(production);
                 join.alpha_memory
-                    .as_mut()
-                    .unwrap()
+                    .borrow_mut()
                     .items
-                    .iter_mut()
-                    .for_each(|item| {
-                        activate_right(current_node.as_mut().unwrap(), item.wme.clone())
-                    })
+                    .iter()
+                    .for_each(|item| activate_right(&current_node, item.borrow().wme.clone()))
             }
             Node::Production(_) => panic!("Production node cannot have children"),
         };
@@ -154,14 +158,14 @@ pub struct ConstantTestNode {
 
     /// The [Alpha memory][AlphaMemoryNode] that will get activated if the condition is met
     /// and if it exists.
-    output_memory: Option<NonNull<AlphaMemoryNode>>,
+    output_memory: Option<Rc<RefCell<AlphaMemoryNode>>>,
 
     ///
-    children: Vec<NonNull<ConstantTestNode>>,
+    children: Vec<Rc<RefCell<ConstantTestNode>>>,
 }
 
 impl ConstantTestNode {
-    unsafe fn activate(&mut self, wme: Wme) {
+    fn activate(&mut self, wme: Wme) {
         // If the test does not exist, it is the root node so we skip conditional checks
         if let Some(ref component) = self.component {
             let value = wme[*component];
@@ -172,134 +176,137 @@ impl ConstantTestNode {
         }
 
         // Activate corresponding alpha memories for the node
-        if let Some(ref mut memory) = self.output_memory {
-            memory.as_mut().activate(wme.clone())
+        if let Some(ref memory) = self.output_memory {
+            activate(memory, wme.clone());
         }
 
         // Propagate the activation to the children
         self.children
             .iter_mut()
-            .for_each(|child| child.as_mut().activate(wme.clone()))
+            .for_each(|child| child.borrow_mut().activate(wme.clone()))
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AlphaMemoryNode {
-    items: Vec<AlphaMemoryItem>,
-    successors: Vec<NonNull<Node>>,
+    items: Vec<Rc<RefCell<AlphaMemoryItem>>>,
+    successors: Vec<Rc<RefCell<Node>>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AlphaMemoryItem {
     wme: Wme,
-    alpha_memory: *mut AlphaMemoryNode,
-    next: Option<*mut Self>,
-    previous: Option<*mut Self>,
+    alpha_memory: Rc<RefCell<AlphaMemoryNode>>,
+    next: Option<Rc<RefCell<Self>>>,
+    previous: Option<Rc<RefCell<Self>>>,
 }
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BetaMemoryNode {
     /// Has to be option because of the dummy top node with no parent
-    parent: Option<*mut Node>,
-    children: Vec<*mut Node>,
-    beta_memory: Vec<Token>,
+    parent: Option<Rc<RefCell<Node>>>,
+    children: Vec<Rc<RefCell<Node>>>,
+    beta_memory: Vec<Rc<RefCell<Token>>>,
 }
 
-impl AlphaMemoryNode {
-    unsafe fn activate(&mut self, mut wme: Wme) {
-        // Set the item's previous pointer to the last item
-        let previous = self.items.iter_mut().last().map(|item| item as *mut _);
+fn activate(alpha_mem_node: &Rc<RefCell<AlphaMemoryNode>>, mut wme: Wme) {
+    // Set the item's previous pointer to the last item
+    let previous = alpha_mem_node.borrow().items.iter().last().cloned();
 
-        let mut item = AlphaMemoryItem {
-            wme: wme.clone(),
-            alpha_memory: self as *mut _,
-            next: None,
-            previous,
-        };
+    let item = AlphaMemoryItem {
+        wme: wme.clone(),
+        alpha_memory: alpha_mem_node.clone(),
+        next: None,
+        previous: previous.clone(),
+    };
 
-        // Append the current item to the `next` pointer of the last one
-        if let Some(mut previous) = previous {
-            previous.as_mut().unwrap().next = Some(&mut item as *mut _)
-        }
+    let item = Rc::new(RefCell::new(item));
 
-        wme.alpha_mem_items
-            .push(NonNull::new(&mut item as *mut _).expect("Pointer is null"));
-
-        self.items.push(item);
-
-        self.successors
-            .iter_mut()
-            .for_each(|node| activate_right(node.as_mut(), wme.clone()))
+    // Append the current item to the `next` pointer of the last one
+    if let Some(previous) = previous {
+        previous.borrow_mut().next = Some(item.clone())
     }
+
+    wme.alpha_mem_items.push(item.clone());
+
+    let mut alpha_mem = alpha_mem_node.borrow_mut();
+
+    alpha_mem.items.push(item);
+
+    alpha_mem
+        .successors
+        .iter()
+        .for_each(|node| activate_right(node, wme.clone()))
 }
 
-unsafe fn make_token(node: *mut Node, parent: Option<NonNull<Token>>, mut wme: Wme) -> Token {
-    let mut token = Token {
-        parent,
+fn make_token(
+    node: Rc<RefCell<Node>>,
+    parent: Option<Rc<RefCell<Token>>>,
+    mut wme: Wme,
+) -> Rc<RefCell<Token>> {
+    let token = Token {
+        parent: parent.clone(),
         wme: wme.clone(),
         node,
         children: vec![],
     };
 
+    let token = Rc::new(RefCell::new(token));
+
     // Append token to parent's children list
-    if let Some(mut parent) = parent {
-        parent
-            .as_mut()
-            .children
-            .push(NonNull::new(&mut token as *mut _).expect("Impossible"))
+    if let Some(parent) = parent {
+        parent.as_ref().borrow_mut().children.push(token.clone())
     }
 
     // Append token to the WME token list for efficient removal
-    wme.tokens
-        .push(NonNull::new(&mut token as *mut _).expect("Impossible"));
+    wme.tokens.push(token.clone());
 
     token
 }
 
-unsafe fn remove_wme(mut wme: Wme) {
-    for item in wme.alpha_mem_items.iter_mut() {
-        let alpha_mem = item.as_mut().alpha_memory.as_mut().unwrap();
+fn remove_wme(mut wme: Wme) {
+    for item in wme.alpha_mem_items.iter() {
+        let item = item.borrow_mut().to_owned();
+        let mut alpha_mem = item.alpha_memory.borrow_mut();
         let id = wme.id;
-        if let Some(i) = alpha_mem.items.iter().position(|el| el.wme.id == id) {
+        if let Some(i) = alpha_mem
+            .items
+            .iter()
+            .position(|el| el.borrow().wme.id == id)
+        {
             alpha_mem.items.remove(i);
         }
     }
+
     while let Some(token) = wme.tokens.pop() {
-        delete_token_and_descendants(token.as_ptr())
+        delete_token_and_descendants(token)
     }
 }
 
-unsafe fn delete_token_and_descendants(token: *mut Token) {
-    let children = &mut (*token).children;
-    while !children.is_empty() {
-        let token = children[0];
-        delete_token_and_descendants(token.as_ptr());
+fn delete_token_and_descendants(token: Rc<RefCell<Token>>) {
+    let token = token.borrow_mut().to_owned();
+
+    for child in token.children {
+        delete_token_and_descendants(child);
     }
 }
 
-unsafe fn activate_left(node: &mut Node, parent_token: &mut Token, wme: Wme) {
-    let mut new_token = make_token(
-        node as *mut _,
-        Some(NonNull::new(parent_token as *mut _).unwrap()),
-        wme.clone(),
-    );
+fn activate_left(node: &Rc<RefCell<Node>>, parent_token: &Rc<RefCell<Token>>, wme: Wme) {
+    let new_token = make_token(node.clone(), Some(parent_token.clone()), wme.clone());
 
-    match node {
-        Node::Beta(beta_node) => {
+    match node.borrow_mut().to_owned() {
+        Node::Beta(mut beta_node) => {
             beta_node.beta_memory.push(new_token.clone());
-            beta_node.children.iter_mut().for_each(|child| {
-                activate_left(child.as_mut().unwrap(), &mut new_token, wme.clone())
-            });
+            beta_node
+                .children
+                .iter_mut()
+                .for_each(|child| activate_left(child, &new_token, wme.clone()));
         }
-        Node::Join(join_node) => {
-            for alpha_mem_item in join_node.alpha_memory.as_mut().unwrap().items.iter() {
-                if join_test(&join_node.tests, &mut new_token, &alpha_mem_item.wme) {
+        Node::Join(mut join_node) => {
+            for alpha_mem_item in join_node.alpha_memory.borrow_mut().items.iter() {
+                if join_test(&join_node.tests, &new_token, &alpha_mem_item.borrow().wme) {
                     join_node.children.iter_mut().for_each(|child| {
-                        activate_left(
-                            child.as_mut().unwrap(),
-                            &mut new_token,
-                            alpha_mem_item.wme.clone(),
-                        )
+                        activate_left(child, &new_token, alpha_mem_item.borrow().wme.clone())
                     });
                 }
             }
@@ -318,15 +325,17 @@ unsafe fn activate_left(node: &mut Node, parent_token: &mut Token, wme: Wme) {
 ///
 /// Right activations are caused by [AlphaNode]s when [WME][Wme]s are changed or
 /// when new [WME][Wme]s enter the network
-unsafe fn activate_right(node: &mut Node, wme: Wme) {
+fn activate_right(node: &Rc<RefCell<Node>>, wme: Wme) {
+    let node = node.borrow_mut().to_owned();
     match node {
-        Node::Join(join_node) => {
-            if let Node::Beta(parent) = join_node.parent.as_mut().unwrap() {
-                for token in parent.beta_memory.iter_mut() {
+        Node::Join(mut join_node) => {
+            if let Node::Beta(parent) = join_node.parent.borrow().to_owned() {
+                for token in parent.beta_memory.iter() {
                     if join_test(&join_node.tests, token, &wme) {
-                        join_node.children.iter_mut().for_each(|child| {
-                            activate_left(child.as_mut().unwrap(), token, wme.clone())
-                        })
+                        join_node
+                            .children
+                            .iter_mut()
+                            .for_each(|child| activate_left(child, token, wme.clone()))
                     }
                 }
             }
@@ -336,39 +345,40 @@ unsafe fn activate_right(node: &mut Node, wme: Wme) {
     }
 }
 
-unsafe fn build_or_share_beta_memory_node(parent: *mut Node) -> *mut Node {
-    if let Some(children) = parent.as_ref().unwrap().children() {
+fn build_or_share_beta_memory_node(parent: &Rc<RefCell<Node>>) -> Rc<RefCell<Node>> {
+    if let Some(children) = parent.borrow().children() {
         for child in children {
-            match child.as_ref().unwrap() {
-                Node::Beta(_) => return *child,
-                _ => {}
+            match *child.borrow() {
+                Node::Beta(_) => return child.clone(),
+                Node::Join(_) => todo!(),
+                Node::Production(_) => todo!(),
             }
         }
     }
 
     let new = BetaMemoryNode {
-        parent: Some(parent),
+        parent: Some(parent.clone()),
         children: vec![],
         beta_memory: vec![],
     };
 
-    &mut Node::Beta(new) as *mut _
+    Rc::new(RefCell::new(Node::Beta(new)))
 }
 
-unsafe fn build_or_share_join_node(
-    parent: *mut Node,
-    alpha_memory: *mut AlphaMemoryNode,
+fn build_or_share_join_node(
+    parent: &Rc<RefCell<Node>>,
+    alpha_memory: Rc<RefCell<AlphaMemoryNode>>,
     tests: &[TestAtJoinNode],
-) -> *mut Node {
-    if let Some(children) = parent.as_ref().unwrap().children() {
+) -> Rc<RefCell<Node>> {
+    if let Some(children) = parent.borrow().children() {
         for child in children {
-            match child.as_ref().unwrap() {
+            let c = child.borrow().to_owned();
+            match c {
                 Node::Join(node)
                     if node.tests.as_slice() == tests
-                        && node.alpha_memory.as_ref().unwrap()
-                            == alpha_memory.as_ref().unwrap() =>
+                        && *node.alpha_memory.borrow() == *alpha_memory.borrow() =>
                 {
-                    return *child
+                    return child.clone()
                 }
                 _ => {}
             }
@@ -376,13 +386,13 @@ unsafe fn build_or_share_join_node(
     }
 
     let new = JoinNode {
-        parent,
+        parent: parent.clone(),
         children: vec![],
         alpha_memory,
         tests: tests.to_vec(),
     };
 
-    &mut Node::Join(new) as *mut _
+    Rc::new(RefCell::new(Node::Join(new)))
 }
 
 fn get_join_tests_from_condition(
@@ -416,7 +426,7 @@ fn get_join_tests_from_condition(
         .collect()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Node {
     Beta(BetaMemoryNode),
     Join(JoinNode),
@@ -424,7 +434,7 @@ pub enum Node {
 }
 
 impl Node {
-    fn children(&self) -> Option<&[*mut Node]> {
+    fn children(&self) -> Option<&[Rc<RefCell<Node>>]> {
         match self {
             Node::Beta(node) if !node.children.is_empty() => Some(&node.children),
             Node::Join(node) if !node.children.is_empty() => Some(&node.children),
@@ -432,36 +442,37 @@ impl Node {
         }
     }
 
-    fn add_child(&mut self, node: *mut Node) {
+    fn add_child(&mut self, node: Rc<RefCell<Node>>) {
         match self {
             Node::Beta(ref mut beta) => beta.children.push(node),
             Node::Join(ref mut join) => join.children.push(node),
             Node::Production(_) => panic!("Production node cannot have children"),
         }
     }
-
-    unsafe fn to_non_null(mut self) -> NonNull<Self> {
-        NonNull::new(&mut self as *mut _).unwrap()
-    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct JoinNode {
-    parent: *mut Node,
-    alpha_memory: *mut AlphaMemoryNode,
-    children: Vec<*mut Node>,
+    parent: Rc<RefCell<Node>>,
+    alpha_memory: Rc<RefCell<AlphaMemoryNode>>,
+    children: Vec<Rc<RefCell<Node>>>,
     tests: Vec<TestAtJoinNode>,
 }
 
-fn join_test(tests: &[TestAtJoinNode], token: &Token, wme: &Wme) -> bool {
+fn join_test(tests: &[TestAtJoinNode], token: &Rc<RefCell<Token>>, wme: &Wme) -> bool {
     for test in tests.iter() {
         let field_value = wme[test.arg_one];
-        let wme2 = &token.nth_parent(test.distance_to_wme).wme;
+
+        let parent = nth_parent(token.clone(), test.distance_to_wme);
+        let wme2 = &parent.borrow().wme;
+
         let test = wme2[test.arg_two];
+
         if field_value != test {
             return false;
         }
     }
+
     true
 }
 
@@ -483,25 +494,25 @@ pub struct TestAtJoinNode {
     arg_two: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProductionNode {
     tokens: Vec<Token>,
-    parent: *mut Node,
+    parent: Rc<RefCell<Node>>,
     production: Production,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Production {
     id: usize,
     conditions: Vec<Condition>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Wme {
     id: usize,
     fields: [usize; 3],
-    alpha_mem_items: Vec<NonNull<AlphaMemoryItem>>,
-    tokens: Vec<NonNull<Token>>,
+    alpha_mem_items: Vec<Rc<RefCell<AlphaMemoryItem>>>,
+    tokens: Vec<Rc<RefCell<Token>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -622,26 +633,23 @@ impl Condition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token {
-    parent: Option<NonNull<Self>>,
+    parent: Option<Rc<RefCell<Self>>>,
     wme: Wme,
-    node: *mut Node,
-    children: Vec<NonNull<Self>>,
+    node: Rc<RefCell<Node>>,
+    children: Vec<Rc<RefCell<Token>>>,
 }
 
-impl Token {
-    fn nth_parent<'a>(&'a self, n: usize) -> &'a Self {
-        let mut token = self;
-        for _ in 0..n {
-            if let Some(parent) = token.parent {
-                token = unsafe { parent.as_ref() };
-            } else {
-                return token;
-            }
-        }
-        token
+fn nth_parent(mut token: Rc<RefCell<Token>>, n: usize) -> Rc<RefCell<Token>> {
+    for _ in 0..n {
+        if let Some(ref parent) = token.clone().borrow().parent {
+            token = parent.clone();
+        } else {
+            return token;
+        };
     }
+    token
 }
 
 #[cfg(test)]
@@ -650,17 +658,15 @@ mod tests {
 
     #[test]
     fn it_works() {
-        unsafe {
-            let mut rete = Rete::new();
-            dbg!(&rete);
-            let conditions = Vec::from([Condition([
-                ConditionTest::Variable(1),
-                ConditionTest::Constant(2),
-                ConditionTest::Variable(3),
-            ])]);
-            rete.add_production(Production { id: 1, conditions });
-            dbg!(rete);
-        }
+        let mut rete = Rete::new();
+        dbg!(&rete);
+        let conditions = Vec::from([Condition([
+            ConditionTest::Variable(1),
+            ConditionTest::Constant(2),
+            ConditionTest::Variable(3),
+        ])]);
+        rete.add_production(Production { id: 1, conditions });
+        dbg!(rete);
     }
 
     #[test]
