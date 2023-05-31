@@ -1,6 +1,14 @@
-#![allow(dead_code)]
-use std::{
-    cell::RefCell, collections::HashMap, hash::Hash, ops::Index, rc::Rc, sync::atomic::AtomicUsize,
+mod display;
+mod item;
+mod node;
+
+use item::{Condition, ConstantTest, TestAtJoinNode, Token, Wme};
+use node::{AlphaMemoryNode, Node, Production};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::atomic::AtomicUsize};
+
+use crate::{
+    item::AlphaMemoryItem,
+    node::{BetaMemoryNode, JoinNode, ProductionNode},
 };
 
 #[derive(Debug)]
@@ -18,32 +26,40 @@ pub struct Rete {
 
 type RcCell<T> = Rc<RefCell<T>>;
 
-static NODE_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
+trait AsRcCell: Sized {
+    fn to_cell(self) -> RcCell<Self> {
+        Rc::new(RefCell::new(self))
+    }
+}
 
-fn id() -> usize {
+static NODE_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
+static TOKEN_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
+
+fn node_id() -> usize {
     NODE_ID_GENERATOR.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+}
+
+fn token_id() -> usize {
+    TOKEN_ID_GENERATOR.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
 }
 
 impl Rete {
     fn new() -> Self {
         let dummy_top_node = BetaMemoryNode {
-            id: id(),
+            id: node_id(),
             parent: None,
             children: vec![],
             items: vec![],
         };
 
+        println!("Created initial dummy {dummy_top_node}");
+
         let dummy_top_node = Rc::new(RefCell::new(Node::Beta(dummy_top_node)));
 
         let dummy_top_token = Token {
-            id: 0, // TODO
+            id: token_id(),
             parent: None,
-            wme: Wme {
-                id: 0,
-                fields: [0, 0, 0],
-                alpha_mem_items: vec![],
-                tokens: vec![],
-            },
+            wme: Wme::new(0, [0, 0, 0]),
             node: dummy_top_node.clone(),
             children: vec![],
         };
@@ -63,13 +79,25 @@ impl Rete {
     }
 
     fn add_wme(&mut self, wme: Wme) {
+        println!("Adding WME {:?}", wme);
+
         for element in wme.permutations() {
             let Some(memory) = self.constant_tests.get(&element) else { continue };
+
             self.working_memory
                 .entry(wme.clone())
                 .and_modify(|mems| mems.push(memory.clone()))
                 .or_insert_with(|| vec![memory.clone()]);
-            activate_alpha_memory(memory, wme.clone())
+
+            println!(
+                "Found existing memory {} for element {:?}",
+                memory.borrow().id,
+                element
+            );
+
+            activate_alpha_memory(memory, wme);
+
+            return;
         }
     }
 
@@ -81,18 +109,28 @@ impl Rete {
 
         // Check whether an alpha memory like this exists
         if let Some(alpha_mem) = self.constant_tests.get(&constant_test) {
+            println!("Shared {}", alpha_mem.borrow());
             return alpha_mem.clone();
         }
 
         // Alpha memory not found, create new one and insert into map
         let am = AlphaMemoryNode {
+            id: node_id(),
             items: vec![],
             successors: vec![],
         };
 
+        println!("Built {am}");
+
         let am = Rc::new(RefCell::new(am));
 
         self.constant_tests.insert(constant_test, am.clone());
+
+        println!(
+            "Inserted constant test {:?} for AM {}",
+            constant_test,
+            am.borrow().id
+        );
 
         self.working_memory.iter_mut().for_each(|(wme, a_mem)| {
             if constant_test.matches(wme) {
@@ -106,9 +144,12 @@ impl Rete {
     }
 
     fn add_production(&mut self, production: Production) {
+        println!("Adding production {}", production.id);
         let conditions = &production.conditions;
 
         assert!(!conditions.is_empty(), "LHS of production cannot be empty");
+
+        println!("Processing condition {:?}", conditions[0]);
 
         let mut current_node = self.dummy_top_node.clone();
 
@@ -120,6 +161,7 @@ impl Rete {
         current_node = build_or_share_join_node(&current_node, &alpha_memory, &tests);
 
         for i in 1..conditions.len() {
+            println!("Processing condition {:?}", conditions[i]);
             // Get the beta memory node Mi
             current_node = build_or_share_beta_memory_node(&current_node);
 
@@ -138,6 +180,13 @@ impl Rete {
             production,
         };
 
+        println!(
+            "Created new production node {} with parent {} {}",
+            production.id,
+            current_node.borrow()._type(),
+            current_node.borrow().id()
+        );
+
         let production = Rc::new(RefCell::new(Node::Production(production)));
 
         current_node.borrow_mut().add_child(&production);
@@ -150,7 +199,7 @@ impl Rete {
 fn update_new_node_with_matches_from_above(node: &RcCell<Node>) {
     let Some(parent) = node.borrow().parent() else { return; };
 
-    println!("Updating node {}", parent.borrow().id());
+    println!("Updating node {}", parent.borrow());
 
     match *parent.borrow_mut() {
         Node::Beta(ref beta) => beta
@@ -158,8 +207,7 @@ fn update_new_node_with_matches_from_above(node: &RcCell<Node>) {
             .iter()
             .for_each(|token| activate_left(node, token, token.borrow().wme.clone())),
         Node::Join(ref mut join) => {
-            let children = join.children.clone();
-            join.children = vec![node.clone()];
+            let children = std::mem::replace(&mut join.children, vec![node.clone()]);
             join.alpha_memory
                 .borrow_mut()
                 .items
@@ -171,41 +219,13 @@ fn update_new_node_with_matches_from_above(node: &RcCell<Node>) {
     };
 }
 
-pub enum ReteInput {
-    AddWme(Wme),
-    RemoveWme(usize),
-    AddProduction(Production),
-    RemoveProduction(usize),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AlphaMemoryNode {
-    items: Vec<RcCell<AlphaMemoryItem>>,
-    successors: Vec<RcCell<Node>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AlphaMemoryItem {
-    wme: Wme,
-    alpha_memory: RcCell<AlphaMemoryNode>,
-    next: Option<RcCell<Self>>,
-    previous: Option<RcCell<Self>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BetaMemoryNode {
-    id: usize,
-    /// Has to be option because of the dummy top node with no parent
-    parent: Option<RcCell<Node>>,
-    children: Vec<RcCell<Node>>,
-    items: Vec<RcCell<Token>>,
-}
-
 fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, mut wme: Wme) {
+    println!("Activating Alpha Node: {}", alpha_mem_node.borrow());
     // Set the item's previous pointer to the last item
     let previous = alpha_mem_node.borrow().items.iter().last().cloned();
 
     let item = AlphaMemoryItem {
+        id: wme.id,
         wme: wme.clone(),
         alpha_memory: alpha_mem_node.clone(),
         next: None,
@@ -232,61 +252,22 @@ fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, mut wme: Wme)
         .for_each(|node| activate_right(node, wme.clone()))
 }
 
-#[inline]
-fn make_token(node: RcCell<Node>, parent: Option<RcCell<Token>>, mut wme: Wme) -> RcCell<Token> {
-    let token = Token {
-        id: 1, // TODO
-        parent: parent.clone(),
-        wme: wme.clone(),
-        node,
-        children: vec![],
-    };
-
-    let token = Rc::new(RefCell::new(token));
-
-    // Append token to parent's children list
-    if let Some(parent) = parent {
-        parent.borrow_mut().children.push(token.clone())
-    }
-
-    // Append token to the WME token list for efficient removal
-    wme.tokens.push(token.clone());
-
-    token
-}
-
-fn remove_wme(mut wme: Wme) {
-    for item in wme.alpha_mem_items.iter() {
-        let item = item.borrow_mut().to_owned();
-        let mut alpha_mem = item.alpha_memory.borrow_mut();
-        let id = wme.id;
-        if let Some(i) = alpha_mem
-            .items
-            .iter()
-            .position(|el| el.borrow().wme.id == id)
-        {
-            alpha_mem.items.remove(i);
-        }
-    }
-
-    while let Some(token) = wme.tokens.pop() {
-        delete_token_and_descendants(token)
-    }
-}
-
-fn delete_token_and_descendants(token: RcCell<Token>) {
-    let token = token.borrow_mut().to_owned();
-
-    for child in token.children {
-        delete_token_and_descendants(child);
-    }
-}
-
-fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, wme: Wme) {
-    let new_token = make_token(node.clone(), Some(parent_token.clone()), wme.clone());
-
+/// Left activation of Beta nodes cause them to create tokens and propagate the left activation to their children, i.e.
+/// Join nodes, with the newly created token.
+///
+/// Left activation of Join nodes cause them to execute their join tests with the given token and if successful propagate
+/// the left activation to their children.
+///
+/// Left activation of production nodes cause them to activate the underlying production.
+fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, mut wme: Wme) {
     match &mut *node.borrow_mut() {
         Node::Beta(ref mut beta_node) => {
+            let new_token = Token::new(node.clone(), Some(parent_token.clone()), &mut wme);
+            println!(
+                "Left activating beta {} and appending token {}",
+                beta_node.id,
+                new_token.borrow().id
+            );
             beta_node.items.push(new_token.clone());
             beta_node
                 .children
@@ -294,17 +275,20 @@ fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, wme: Wme) {
                 .for_each(|child| activate_left(child, &new_token, wme.clone()));
         }
         Node::Join(ref mut join_node) => {
+            println!("Left activating join {}", join_node.id);
             for alpha_mem_item in join_node.alpha_memory.borrow().items.iter() {
-                let test = join_test(&join_node.tests, &new_token, &alpha_mem_item.borrow().wme);
+                let test = join_test(&join_node.tests, parent_token, &alpha_mem_item.borrow().wme);
                 if test {
                     join_node.children.iter().for_each(|child| {
-                        activate_left(child, &new_token, alpha_mem_item.borrow().wme.clone())
+                        activate_left(child, parent_token, alpha_mem_item.borrow().wme.clone())
                     });
                 }
             }
         }
         Node::Production(p_node) => {
-            println!("Production node activated! {:?}", p_node.id)
+            println!(
+                "====================\nProduction node activated! {p_node}\n===================="
+            )
         }
     }
 }
@@ -318,14 +302,14 @@ fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, wme: Wme) {
 /// Right activations are caused by [AlphaMemoryNode]s when [WME][Wme]s are changed or
 /// when new [WME][Wme]s enter the network
 fn activate_right(node: &RcCell<Node>, wme: Wme) {
-    let node = node.borrow_mut().to_owned();
+    let node = &mut *node.borrow_mut();
+    println!("Right activating {} {}", node._type(), node.id());
     match node {
-        Node::Join(mut join_node) => {
-            println!("Right activating join node {:?}", join_node.id);
+        Node::Join(ref mut join_node) => {
             if let Node::Beta(ref parent) = *join_node.parent.borrow() {
-                println!("Traversing items from parent {:?}", parent.id);
                 for token in parent.items.iter() {
-                    if join_test(&join_node.tests, token, &wme) {
+                    let test = join_test(&join_node.tests, token, &wme);
+                    if test {
                         join_node
                             .children
                             .iter_mut()
@@ -343,14 +327,15 @@ fn build_or_share_beta_memory_node(parent: &RcCell<Node>) -> RcCell<Node> {
     if let Some(children) = parent.borrow().children() {
         // Look for an existing beta node to share
         for child in children {
-            if let Node::Beta(_) = *child.borrow() {
+            if let Node::Beta(ref beta) = *child.borrow() {
+                println!("Shared {beta}");
                 return child.clone();
             }
         }
     }
 
     let new = BetaMemoryNode {
-        id: id(),
+        id: node_id(),
         parent: Some(parent.clone()),
         children: vec![],
         items: vec![],
@@ -358,7 +343,11 @@ fn build_or_share_beta_memory_node(parent: &RcCell<Node>) -> RcCell<Node> {
 
     let new = Rc::new(RefCell::new(Node::Beta(new)));
 
+    parent.borrow_mut().add_child(&new);
+
     update_new_node_with_matches_from_above(&new);
+
+    println!("Built {}", new.borrow());
 
     new
 }
@@ -371,13 +360,14 @@ fn build_or_share_join_node(
     if let Some(children) = parent.borrow().children() {
         // Look for an existing join node to share
         for child in children {
-            let c = child.borrow().to_owned();
+            let c = &*child.borrow();
             match c {
                 Node::Join(node)
                     if node.tests.as_slice() == tests
                         && *node.alpha_memory.borrow() == *alpha_memory.borrow() =>
                 {
-                    return child.clone()
+                    println!("Sharing {}", node);
+                    return child.clone();
                 }
                 _ => {}
             }
@@ -385,18 +375,64 @@ fn build_or_share_join_node(
     }
 
     let new = JoinNode {
-        id: id(),
+        id: node_id(),
         parent: parent.clone(),
         children: vec![],
         alpha_memory: alpha_memory.clone(),
         tests: tests.to_vec(),
     };
+
     let new = Rc::new(RefCell::new(Node::Join(new)));
 
-    // Add the newly created node to the parent's children
+    // Add the newly created node to the alpha memory successors
     alpha_memory.borrow_mut().successors.push(new.clone());
 
+    println!("Built {}", new.borrow());
+
+    parent.borrow_mut().add_child(&new);
+
     new
+}
+
+fn join_test(tests: &[TestAtJoinNode], token: &RcCell<Token>, wme: &Wme) -> bool {
+    println!(
+        "Performing join tests on {tests:?} with WME {} {:?} and token {}",
+        wme.id,
+        wme.fields,
+        token.borrow().id
+    );
+
+    for test in tests.iter() {
+        let parent = Token::nth_parent(token.clone(), test.distance_to_wme);
+
+        // If the tokens are pointing to the dummy token they immediatelly get a pass
+        if parent.borrow().id == 0 {
+            println!("Join test successful");
+            return true;
+        }
+
+        let wme2 = &parent.borrow().wme;
+        println!(
+            "Comparing WME {:?} from token {}",
+            wme2.fields,
+            parent.borrow().id
+        );
+
+        let current_value = wme[test.arg_one];
+        let previous_value = wme2[test.arg_two];
+
+        println!(
+            "Testing Current WME {:?} with Previous {:?},  {} != {}",
+            wme.id, wme2.id, current_value, previous_value
+        );
+
+        if current_value != previous_value {
+            return false;
+        }
+    }
+
+    println!("Join test successful");
+    true
 }
 
 fn get_join_tests_from_condition(
@@ -405,14 +441,21 @@ fn get_join_tests_from_condition(
 ) -> Vec<TestAtJoinNode> {
     let mut result = vec![];
 
-    for (field_idx, var) in condition.variables() {
-        let Some((i, prev_idx)) = earlier_conds
+    println!(
+        "Creating join tests from {:?} and earlier {:?}",
+        condition, earlier_conds
+    );
+
+    let current_condition_num = earlier_conds.len();
+
+    for (current_idx, var) in condition.variables() {
+        let Some((distance, prev_idx)) = earlier_conds
             .iter()
-            .rev()
             .enumerate()
+            .rev()
             .find_map(|(idx, cond)| cond.variables().find_map(|(cond_idx, v)|
-            if v == var {
-                Some((idx, cond_idx))
+                if v == var {
+                    Some((idx + 1, cond_idx))
                 } else {
                     None
                 }
@@ -422,263 +465,43 @@ fn get_join_tests_from_condition(
         };
 
         let test = TestAtJoinNode {
-            arg_one: field_idx,
-            distance_to_wme: i,
+            arg_one: current_idx,
+            distance_to_wme: current_condition_num - distance,
             arg_two: prev_idx,
         };
 
         result.push(test)
     }
 
+    println!("Created join tests {:?}", result);
     result
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Node {
-    Beta(BetaMemoryNode),
-    Join(JoinNode),
-    Production(ProductionNode),
-}
-
-impl Node {
-    fn id(&self) -> usize {
-        match self {
-            Node::Beta(beta) => beta.id,
-            Node::Join(join) => join.id,
-            Node::Production(ProductionNode { production, .. }) => production.id,
-        }
-    }
-
-    fn children(&self) -> Option<&[RcCell<Node>]> {
-        match self {
-            Node::Beta(node) if !node.children.is_empty() => Some(&node.children),
-            Node::Join(node) if !node.children.is_empty() => Some(&node.children),
-            _ => None,
-        }
-    }
-
-    fn parent(&self) -> Option<RcCell<Node>> {
-        match self {
-            Node::Beta(node) => node.parent.clone(),
-            Node::Join(node) => Some(node.parent.clone()),
-            Node::Production(node) => Some(node.parent.clone()),
-        }
-    }
-
-    fn add_child(&mut self, node: &RcCell<Node>) {
-        match self {
-            Node::Beta(ref mut beta) => {
-                println!(
-                    "Adding child {} to Beta Node {}",
-                    node.borrow().id(),
-                    beta.id
-                );
-                beta.children.push(node.clone())
-            }
-            Node::Join(ref mut join) => join.children.push(node.clone()),
-            Node::Production(_) => panic!("Production node cannot have children"),
-        }
-    }
-
-    fn add_token(&mut self, token: &RcCell<Token>) {
-        match self {
-            Node::Beta(beta) => beta.items.push(token.clone()),
-            _ => panic!("Node cannot contain tokens"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JoinNode {
-    id: usize,
-    parent: RcCell<Node>,
-    alpha_memory: RcCell<AlphaMemoryNode>,
-    children: Vec<RcCell<Node>>,
-    tests: Vec<TestAtJoinNode>,
-}
-
-fn join_test(tests: &[TestAtJoinNode], token: &RcCell<Token>, wme: &Wme) -> bool {
-    println!(
-        "Performing join tests on {tests:?} with WME {:?}",
-        wme.fields
-    );
-    for test in tests.iter() {
-        let field_value = wme[test.arg_one];
-
-        let parent = nth_parent(token.clone(), test.distance_to_wme);
-        let wme2 = &parent.borrow().wme;
-
-        let test = wme2[test.arg_two];
-
-        if field_value != test {
-            return false;
-        }
-    }
-
-    true
-}
-
-/// Specifies the locations of the two fields whose values must be
-/// equal in order for some variable to be bound consistently.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct TestAtJoinNode {
-    /// An index that ultimately indexes into a WME from the Alpha memory connected
-    /// to the overlying [JoinNode] of this test node. Compared with `arg_two` to
-    /// tests whether a join should succeed.
-    arg_one: usize,
-
-    /// Used to traverse a token's parents to find the WME value
-    /// to compare with the first one.
-    distance_to_wme: usize,
-
-    /// An index that ultimately indexes into a WME from the parent [Token]
-    /// found by the `distance_to_wme`
-    arg_two: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProductionNode {
-    id: usize,
-    parent: RcCell<Node>,
-    production: Production,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Production {
-    id: usize,
-    conditions: Vec<Condition>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Wme {
-    id: usize,
-
-    /// Represents [id, attribute, value]
-    fields: [usize; 3],
-
-    /// Alpha memory items which contain this WME as their element
-    alpha_mem_items: Vec<RcCell<AlphaMemoryItem>>,
-
-    /// Tokens which contain this WME as their element
-    tokens: Vec<RcCell<Token>>,
-}
-
-impl Hash for Wme {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-        self.fields.hash(state);
-    }
-}
-
-impl Index<usize> for Wme {
-    type Output = usize;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        match index {
-            0 => &self.fields[0],
-            1 => &self.fields[1],
-            2 => &self.fields[2],
-            _ => panic!("WMEs cannot be indexed by indices higher than 2"),
-        }
-    }
-}
-
-impl Wme {
-    fn permutations(&self) -> impl Iterator<Item = ConstantTest> {
-        [
-            ConstantTest([Some(self[0]), Some(self[1]), Some(self[2])]),
-            ConstantTest([Some(self[0]), Some(self[1]), None]),
-            ConstantTest([Some(self[0]), None, Some(self[2])]),
-            ConstantTest([Some(self[0]), None, None]),
-            ConstantTest([None, Some(self[1]), Some(self[2])]),
-            ConstantTest([None, Some(self[1]), None]),
-            ConstantTest([None, None, Some(self[2])]),
-            ConstantTest([None, None, None]),
-        ]
-        .into_iter()
-    }
-}
-
-/// When productions are added to the network, constant tests are created based on the its condition's constants.
-/// If a constant exists in the condition, it will be represented by `Some(constant)` in the test.
-/// A `None` in the constant test represents a wildcard.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct ConstantTest([Option<usize>; 3]);
-
-impl ConstantTest {
-    fn matches(&self, wme: &Wme) -> bool {
-        self.0[0].map_or(true, |s| s == wme.fields[0])
-            && self.0[1].map_or(true, |s| s == wme.fields[1])
-            && self.0[2].map_or(true, |s| s == wme.fields[2])
-    }
-}
-
-impl From<Condition> for ConstantTest {
-    fn from(value: Condition) -> Self {
-        Self([value.0[0].into(), value.0[1].into(), value.0[2].into()])
-    }
-}
-
-impl From<ConditionTest> for Option<usize> {
-    fn from(test: ConditionTest) -> Option<usize> {
-        match test {
-            ConditionTest::Constant(id) => Some(id),
-            ConditionTest::Variable(_) => None,
-        }
-    }
-}
-
-/// A test for a single symbol.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ConditionTest {
-    /// Test for a symbol with the given ID.
-    Constant(usize),
-    /// Test for any symbol, as long as it is the same symbol as other
-    /// conditions with the same ID within a production.
-    Variable(usize),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Condition([ConditionTest; 3]);
-
-impl Condition {
-    /// Returns an iterator over only the variable tests, along with
-    /// their indices.
-    fn variables(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        self.0
+fn remove_wme(mut wme: Wme) {
+    for item in wme.alpha_mem_items.iter() {
+        let item = item.borrow_mut();
+        let mut alpha_mem = item.alpha_memory.borrow_mut();
+        let id = wme.id;
+        if let Some(i) = alpha_mem
+            .items
             .iter()
-            .enumerate()
-            .filter_map(|(i, test)| match test {
-                ConditionTest::Variable(id) => Some((i, *id)),
-                ConditionTest::Constant(_) => None,
-            })
+            .position(|el| el.borrow().wme.id == id)
+        {
+            alpha_mem.items.remove(i);
+        }
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Token {
-    id: usize,
-    parent: Option<RcCell<Self>>,
-    wme: Wme,
-    node: RcCell<Node>,
-    children: Vec<RcCell<Self>>,
-}
-
-fn nth_parent(mut token: RcCell<Token>, n: usize) -> RcCell<Token> {
-    for _ in 0..n {
-        if let Some(ref parent) = token.clone().borrow().parent {
-            token = parent.clone();
-        } else {
-            return token;
-        };
+    while let Some(token) = wme.tokens.pop() {
+        Token::delete_self_and_descendants(token)
     }
-    token
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::item::ConditionTest;
 
+    use super::*;
+    /*
     #[test]
     fn it_works() {
         let mut rete = Rete::new();
@@ -773,7 +596,7 @@ mod tests {
     #[test]
     fn nth_parent_works() {
         let beta = BetaMemoryNode {
-            id: id(),
+            id: node_id(),
             parent: None,
             children: vec![],
             items: vec![],
@@ -821,12 +644,244 @@ mod tests {
         first.borrow_mut().children.push(second.clone());
         daddy.borrow_mut().children.push(first);
 
-        let parent = nth_parent(second, 2);
+        let parent = Token::nth_parent(second, 2);
 
         assert_eq!(parent.borrow().id, daddy.borrow().id);
         assert_eq!(
             parent.borrow().children.len(),
             daddy.borrow().children.len()
         );
+    } */
+
+    #[cfg(test)]
+    mod block_world {
+        use super::*;
+
+        pub const B1: usize = 1;
+        pub const B2: usize = 2;
+        pub const B3: usize = 3;
+        pub const B4: usize = 4;
+        pub const B5: usize = 5;
+        pub const B6: usize = 6;
+
+        pub const ON: usize = 10;
+        pub const COLOR: usize = 11;
+        pub const LEFT_OF: usize = 12;
+
+        pub const RED: usize = 20;
+        pub const MAIZE: usize = 21;
+        pub const GREEN: usize = 22;
+        pub const BLUE: usize = 23;
+        pub const WHITE: usize = 24;
+        pub const TABLE: usize = 25;
+
+        pub const W1: Wme = Wme {
+            id: 1,
+            fields: [B1, ON, B2],
+            alpha_mem_items: vec![],
+            tokens: vec![],
+        };
+        pub const W2: Wme = Wme {
+            id: 2,
+            fields: [B1, ON, B3],
+            alpha_mem_items: vec![],
+            tokens: vec![],
+        };
+        pub const W3: Wme = Wme {
+            id: 3,
+            fields: [B1, COLOR, RED],
+            alpha_mem_items: vec![],
+            tokens: vec![],
+        };
+        pub const W4: Wme = Wme {
+            id: 4,
+            fields: [B2, ON, TABLE],
+            alpha_mem_items: vec![],
+            tokens: vec![],
+        };
+        pub const W5: Wme = Wme {
+            id: 5,
+            fields: [B2, LEFT_OF, B3],
+            alpha_mem_items: vec![],
+            tokens: vec![],
+        };
+        pub const W6: Wme = Wme {
+            id: 6,
+            fields: [B2, COLOR, BLUE],
+            alpha_mem_items: vec![],
+            tokens: vec![],
+        };
+        pub const W7: Wme = Wme {
+            id: 7,
+            fields: [B3, LEFT_OF, B4],
+            alpha_mem_items: vec![],
+            tokens: vec![],
+        };
+        pub const W8: Wme = Wme {
+            id: 8,
+            fields: [B3, ON, TABLE],
+            alpha_mem_items: vec![],
+            tokens: vec![],
+        };
+        pub const W9: Wme = Wme {
+            id: 9,
+            fields: [B3, COLOR, RED],
+            alpha_mem_items: vec![],
+            tokens: vec![],
+        };
+        fn wmes() -> Vec<Wme> {
+            vec![W1, W2, W3, W4, W5, W6, W7, W8, W9]
+        }
+
+        const V_X: ConditionTest = ConditionTest::Variable(0);
+        const V_Y: ConditionTest = ConditionTest::Variable(1);
+        const V_Z: ConditionTest = ConditionTest::Variable(2);
+        const V_A: ConditionTest = ConditionTest::Variable(3);
+        const V_B: ConditionTest = ConditionTest::Variable(4);
+        const V_C: ConditionTest = ConditionTest::Variable(5);
+        const V_D: ConditionTest = ConditionTest::Variable(6);
+        const V_S: ConditionTest = ConditionTest::Variable(7);
+
+        const C_ON: ConditionTest = ConditionTest::Constant(ON);
+        const C_LEFT_OF: ConditionTest = ConditionTest::Constant(LEFT_OF);
+        const C_COLOR: ConditionTest = ConditionTest::Constant(COLOR);
+        const C_RED: ConditionTest = ConditionTest::Constant(RED);
+        const C_MAIZE: ConditionTest = ConditionTest::Constant(MAIZE);
+        const C_BLUE: ConditionTest = ConditionTest::Constant(BLUE);
+        const C_GREEN: ConditionTest = ConditionTest::Constant(GREEN);
+        const C_WHITE: ConditionTest = ConditionTest::Constant(WHITE);
+        const C_TABLE: ConditionTest = ConditionTest::Constant(TABLE);
+
+        const C1: Condition = Condition([V_X, C_ON, V_Y]);
+        const C2: Condition = Condition([V_Y, C_LEFT_OF, V_Z]);
+        const C3: Condition = Condition([V_Z, C_COLOR, C_RED]);
+        const C4: Condition = Condition([V_A, C_COLOR, C_MAIZE]);
+        const C5: Condition = Condition([V_B, C_COLOR, C_BLUE]);
+        const C6: Condition = Condition([V_C, C_COLOR, C_GREEN]);
+        const C7: Condition = Condition([V_D, C_COLOR, C_WHITE]);
+        const C8: Condition = Condition([V_S, C_ON, C_TABLE]);
+        const C9: Condition = Condition([V_Y, V_A, V_B]);
+        const C10: Condition = Condition([V_A, C_LEFT_OF, V_D]);
+
+        fn productions() -> Vec<Production> {
+            vec![
+                Production {
+                    id: 1,
+                    conditions: vec![C1, C2, C3],
+                },
+                Production {
+                    id: 2,
+                    conditions: vec![C1, C2, C4, C5],
+                },
+                Production {
+                    id: 3,
+                    conditions: vec![C1, C2, C4, C3],
+                },
+            ]
+        }
+        /*
+        #[test]
+        fn add_productions() {
+            let mut rete = Rete::new();
+            for p in productions() {
+                rete.add_production(p);
+            }
+
+            assert_eq!(rete.constant_tests.len(), 5);
+        } */
+
+        /*         #[test]
+        fn add_productions_and_wmes() {
+            let mut rete = Rete::new();
+            for p in productions() {
+                rete.add_production(p);
+            }
+
+            for wme in wmes() {
+                rete.add_wme(wme);
+            }
+        } */
+
+        #[test]
+        fn add_productions_and_wmes() {
+            const C1: Condition = Condition([V_X, C_ON, V_Y]);
+            const C2: Condition = Condition([V_Y, C_LEFT_OF, V_Z]);
+            const C3: Condition = Condition([V_Z, C_COLOR, C_RED]);
+            const C4: Condition = Condition([V_A, C_COLOR, C_MAIZE]);
+            const C5: Condition = Condition([V_B, C_COLOR, C_BLUE]);
+
+            let production_one = Production {
+                id: 1,
+                conditions: vec![C1, C2, C3],
+            };
+            let production_two = Production {
+                id: 2,
+                conditions: vec![C1, C2, C4, C5],
+            };
+
+            let wme_one = Wme {
+                id: 1,
+                fields: [B1, ON, B2],
+                alpha_mem_items: vec![],
+                tokens: vec![],
+            };
+            let wme_two = Wme {
+                id: 2,
+                fields: [B2, LEFT_OF, B3],
+                alpha_mem_items: vec![],
+                tokens: vec![],
+            };
+            let wme_three = Wme {
+                id: 3,
+                fields: [B3, COLOR, RED],
+                alpha_mem_items: vec![],
+                tokens: vec![],
+            };
+
+            let wme_four = Wme {
+                id: 4,
+                fields: [B2, ON, B3],
+                alpha_mem_items: vec![],
+                tokens: vec![],
+            };
+            let wme_five = Wme {
+                id: 5,
+                fields: [B3, LEFT_OF, B4],
+                alpha_mem_items: vec![],
+                tokens: vec![],
+            };
+            let wme_six = Wme {
+                id: 6,
+                fields: [B5, COLOR, MAIZE],
+                alpha_mem_items: vec![],
+                tokens: vec![],
+            };
+            let wme_seven = Wme {
+                id: 7,
+                fields: [B6, COLOR, BLUE],
+                alpha_mem_items: vec![],
+                tokens: vec![],
+            };
+
+            let mut rete = Rete::new();
+
+            rete.add_production(production_one);
+            rete.add_production(production_two);
+
+            println!();
+            rete.add_wme(wme_one);
+            println!();
+            rete.add_wme(wme_two);
+            println!();
+            rete.add_wme(wme_three);
+            println!();
+            rete.add_wme(wme_four);
+            println!();
+            rete.add_wme(wme_five);
+            println!();
+            rete.add_wme(wme_six);
+            println!();
+            rete.add_wme(wme_seven);
+        }
     }
 }
