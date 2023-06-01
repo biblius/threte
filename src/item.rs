@@ -1,11 +1,16 @@
 use crate::{
+    id::{item_id, token_id},
     node::{AlphaMemoryNode, Node},
-    token_id, RcCell,
+    IntoCell, RcCell,
 };
 use std::ops::Index;
-use std::{cell::RefCell, hash::Hash, rc::Rc};
+use std::{hash::Hash, rc::Rc};
 
 /// A WME represents a piece of state in the system.
+///
+/// Clone is derived solely for the initial setup of a WME, it should not be cloned
+/// once in the system. WMEs are hashed based on their ID and fields and index into
+/// corresponding alpha memories containing them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wme {
     pub id: usize,
@@ -13,12 +18,11 @@ pub struct Wme {
     /// Represents [id, attribute, value]
     pub fields: [usize; 3],
 
-    /// Alpha memory items which contain this WME as their element
-    pub alpha_mem_items: Vec<RcCell<AlphaMemoryItem>>,
-
     /// Tokens which contain this WME as their element
     pub tokens: Vec<RcCell<Token>>,
 }
+
+impl IntoCell for Wme {}
 
 impl Hash for Wme {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -45,7 +49,6 @@ impl Wme {
         Self {
             id,
             fields,
-            alpha_mem_items: vec![],
             tokens: vec![],
         }
     }
@@ -65,18 +68,30 @@ impl Wme {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Enables for quick splicing of WMEs. Since a single WME could be located
+/// in many alpha memories, this serves as an indirection.
+#[derive(Debug, PartialEq, Eq)]
 pub struct AlphaMemoryItem {
     pub id: usize,
-    pub wme: Wme,
+    pub wme: RcCell<Wme>,
     pub alpha_memory: RcCell<AlphaMemoryNode>,
-    pub next: Option<RcCell<Self>>,
-    pub previous: Option<RcCell<Self>>,
 }
+
+impl AlphaMemoryItem {
+    pub fn new(wme: &RcCell<Wme>, alpha_memory: &RcCell<AlphaMemoryNode>) -> Self {
+        Self {
+            id: item_id(),
+            wme: Rc::clone(wme),
+            alpha_memory: Rc::clone(alpha_memory),
+        }
+    }
+}
+
+impl IntoCell for AlphaMemoryItem {}
 
 /// Specifies the locations of the two fields whose values must be
 /// equal in order for some variable to be bound consistently.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct TestAtJoinNode {
     /// An index that ultimately indexes into a WME from the Alpha memory connected
     /// to the overlying [JoinNode] of this test node. Compared with `arg_two` to
@@ -95,7 +110,7 @@ pub struct TestAtJoinNode {
 /// A token represents a partially matched condition. Whenever beta nodes are left activated,
 /// tokens are created and stored in them and are used by join nodes to perform join tests to determine
 /// whether to propagate the left activation further.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Token {
     pub id: usize,
 
@@ -104,7 +119,7 @@ pub struct Token {
     pub parent: Option<RcCell<Self>>,
 
     /// The WME this token represents that was partially matched
-    pub wme: Wme,
+    pub wme: RcCell<Wme>,
 
     /// The Beta Node this token belongs to
     pub node: RcCell<Node>,
@@ -112,42 +127,43 @@ pub struct Token {
     /// List of pointers to this token's children
     pub children: Vec<RcCell<Self>>,
 }
+
 impl Token {
     pub fn new(
-        node: RcCell<Node>,
+        node: &RcCell<Node>,
         parent_token: Option<RcCell<Self>>,
-        wme: &mut Wme,
+        wme: &RcCell<Wme>,
     ) -> RcCell<Self> {
         let token = Self {
             id: token_id(),
             parent: parent_token.clone(),
-            wme: wme.clone(),
-            node,
+            wme: Rc::clone(wme),
+            node: node.clone(),
             children: vec![],
         };
 
         println!(
             "Creating token {} and appending to token {}",
             token,
-            parent_token.as_ref().unwrap().borrow().id,
+            parent_token.as_ref().map_or(0, |t| t.borrow().id)
         );
 
-        let token = Rc::new(RefCell::new(token));
+        let token = token.to_cell();
 
         if let Some(parent) = parent_token {
-            parent.borrow_mut().children.push(token.clone())
+            parent.borrow_mut().children.push(Rc::clone(&token))
         }
 
         // Append token to the WME token list for efficient removal
-        wme.tokens.push(token.clone());
+        wme.borrow_mut().tokens.push(Rc::clone(&token));
 
         token
     }
 
     pub fn nth_parent(mut token: RcCell<Self>, n: usize) -> RcCell<Self> {
         for _ in 0..n {
-            if let Some(ref parent) = token.clone().borrow().parent {
-                token = parent.clone();
+            if let Some(ref parent) = Rc::clone(&token).borrow().parent {
+                token = Rc::clone(parent);
             } else {
                 println!("Found {n}th parent token: {}", token.borrow().id);
                 return token;
@@ -158,13 +174,15 @@ impl Token {
     }
 
     pub fn delete_self_and_descendants(token: RcCell<Self>) {
-        let token = token.borrow_mut();
-
-        for child in token.children.iter() {
-            Self::delete_self_and_descendants(child.clone());
+        let tok = &mut *token.borrow_mut();
+        let children = std::mem::take(&mut tok.children);
+        for child in children {
+            Self::delete_self_and_descendants(child);
         }
     }
 }
+
+impl IntoCell for Token {}
 
 /// When productions are added to the network, constant tests are created based on the its condition's constants.
 /// If a constant exists in the condition, it will be represented by `Some(constant)` in the test.

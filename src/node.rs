@@ -1,9 +1,10 @@
 use crate::{
+    id::{alpha_node_id, beta_node_id},
     item::{AlphaMemoryItem, Condition, TestAtJoinNode, Token},
-    node_id, AsRcCell, RcCell,
+    IntoCell, IntoNodeCell, RcCell,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Node {
     Beta(BetaMemoryNode),
     Join(JoinNode),
@@ -68,7 +69,7 @@ impl Node {
 
 /// An AlphaMemoryNode contains items through which it keeps the state of WMEs that
 /// passed constant tests.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct AlphaMemoryNode {
     pub id: usize,
     pub items: Vec<RcCell<AlphaMemoryItem>>,
@@ -77,11 +78,13 @@ pub struct AlphaMemoryNode {
 
 impl AlphaMemoryNode {
     pub fn new() -> Self {
-        Self {
-            id: node_id(),
+        let am = Self {
+            id: alpha_node_id(),
             items: vec![],
             successors: vec![],
-        }
+        };
+        println!("Created Alpha Memory: {}", am);
+        am
     }
 }
 
@@ -96,7 +99,7 @@ pub struct BetaMemoryNode {
 impl BetaMemoryNode {
     pub fn new(parent: Option<RcCell<Node>>) -> Self {
         Self {
-            id: node_id(),
+            id: beta_node_id(),
             parent,
             children: vec![],
             items: vec![],
@@ -104,7 +107,7 @@ impl BetaMemoryNode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct JoinNode {
     pub id: usize,
     pub parent: RcCell<Node>,
@@ -117,32 +120,45 @@ impl JoinNode {
     pub fn new(
         parent: &RcCell<Node>,
         alpha_memory: &RcCell<AlphaMemoryNode>,
-        tests: &[TestAtJoinNode],
+        tests: Vec<TestAtJoinNode>,
     ) -> Self {
         Self {
-            id: node_id(),
+            id: beta_node_id(),
             parent: parent.clone(),
             alpha_memory: alpha_memory.clone(),
             children: vec![],
-            tests: tests.to_vec(),
+            tests,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ProductionNode {
     pub id: usize,
     pub parent: RcCell<Node>,
     pub production: Production,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Production {
     pub id: usize,
     pub conditions: Vec<Condition>,
 }
 
-impl AsRcCell for AlphaMemoryNode {}
-impl AsRcCell for BetaMemoryNode {}
-impl AsRcCell for JoinNode {}
-impl AsRcCell for ProductionNode {}
+impl IntoCell for AlphaMemoryNode {}
+
+impl IntoNodeCell for BetaMemoryNode {
+    fn to_node_cell(self) -> RcCell<Node> {
+        std::rc::Rc::new(std::cell::RefCell::new(Node::Beta(self)))
+    }
+}
+impl IntoNodeCell for JoinNode {
+    fn to_node_cell(self) -> RcCell<Node> {
+        std::rc::Rc::new(std::cell::RefCell::new(Node::Join(self)))
+    }
+}
+impl IntoNodeCell for ProductionNode {
+    fn to_node_cell(self) -> RcCell<Node> {
+        std::rc::Rc::new(std::cell::RefCell::new(Node::Production(self)))
+    }
+}
