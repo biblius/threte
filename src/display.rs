@@ -1,11 +1,12 @@
 use crate::{
-    item::{AlphaMemoryItem, ConstantTest, Token},
+    item::{AlphaMemoryItem, ConstantTest, Token, Wme},
     node::{AlphaMemoryNode, BetaMemoryNode, JoinNode, Node, ProductionNode},
     RcCell, Rete,
 };
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter, Result, Write},
+    rc::Rc,
 };
 
 impl Display for AlphaMemoryNode {
@@ -13,7 +14,7 @@ impl Display for AlphaMemoryNode {
         let items = self.items.iter().fold(String::new(), |mut acc, el| {
             write!(
                 acc,
-                "\n\t{}",
+                "{},",
                 el.try_borrow()
                     .map_or_else(|_| "borrowed".to_string(), |el| el.id.to_string())
             )
@@ -105,34 +106,69 @@ impl Display for Token {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,
-            "Token {{ id: {}, parent: {:?}, wme: {:?}, node: {} }}",
+            "Token {{ id: {}, parent: {:?}, wme: {:?}, node: {}, children: {:?} }}",
             self.id,
-            self.parent.as_ref().map(|t| t.borrow().id),
+            self.parent
+                .as_ref()
+                .map(|t| t.upgrade().unwrap().borrow().id),
             self.wme.borrow().fields,
             self.node
                 .try_borrow()
-                .map_or("borrowed".to_string(), |n| n.id().to_string())
+                .map_or("borrowed".to_string(), |n| n.id().to_string()),
+            self.children
+                .iter()
+                .map(|tok| tok
+                    .try_borrow()
+                    .map_or("borrowed".to_string(), |t| t.id.to_string()))
+                .collect::<Vec<_>>()
+        )
+    }
+}
+
+impl Display for Wme {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(
+            f,
+            "WME {{ id: {}, fields: {:?}, tokens: {:?} }}",
+            self.id,
+            self.fields,
+            self.tokens
+                .iter()
+                .map(|t| t
+                    .try_borrow()
+                    .map_or("borrowed".to_string(), |t| t.id.to_string()))
+                .collect::<Vec<_>>()
         )
     }
 }
 
 impl Rete {
-    pub fn print_to_file(&self) -> std::result::Result<(), std::io::Error> {
+    pub fn print_to_file(&self, path: &str) -> std::result::Result<(), std::io::Error> {
         let mut buf = match std::fs::read_to_string("printed") {
             Ok(buf) => buf,
             Err(_) => {
-                std::fs::write("state.txt", "").unwrap();
-                std::fs::read_to_string("state.txt").unwrap()
+                std::fs::write(path, "").unwrap();
+                std::fs::read_to_string(path).unwrap()
             }
         };
-        writeln!(buf, "TOKENS\n").unwrap();
+        writeln!(buf, "WMES\n").unwrap();
+        write_wmes(&mut buf, &self.working_memory);
+        writeln!(buf, "\nTOKENS\n").unwrap();
         write_tokens(&mut buf, self.dummy_top_token.clone());
         writeln!(buf, "\nBETA NETWORK\n").unwrap();
         write_beta_network(&mut buf, self.dummy_top_node.clone());
         writeln!(buf, "\nALPHA NETWORK\n").unwrap();
         write_alpha_network(&mut buf, &self.constant_tests);
-        std::fs::write("state.txt", buf)?;
+        std::fs::write(path, buf)?;
         Ok(())
+    }
+}
+
+fn write_wmes(buf: &mut String, wmes: &HashMap<usize, RcCell<Wme>>) {
+    let mut items = wmes.iter().collect::<Vec<_>>();
+    items.sort_by(|a, b| a.0.cmp(b.0));
+    for (_, wme) in items {
+        writeln!(buf, "{}", wme.borrow()).unwrap();
     }
 }
 
@@ -165,9 +201,14 @@ fn write_tokens(buf: &mut String, token: RcCell<Token>) {
     let tok = token.borrow();
     writeln!(
         buf,
-        "{}{}",
-        " ".repeat(tok.parent.as_ref().map_or(0, |p| p.borrow().id * 2)),
-        tok
+        "{}{}, refs: {}",
+        " ".repeat(
+            tok.parent
+                .as_ref()
+                .map_or(0, |p| p.upgrade().unwrap().borrow().id * 2)
+        ),
+        tok,
+        Rc::strong_count(&token)
     )
     .unwrap();
     for child in tok.children.iter() {

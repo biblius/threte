@@ -1,9 +1,9 @@
 use crate::{
-    id::{item_id, token_id},
+    id::{item_id, token_id, wme_id},
     node::{AlphaMemoryNode, Node},
     IntoCell, RcCell,
 };
-use std::ops::Index;
+use std::{cell::RefCell, ops::Index, rc::Weak};
 use std::{hash::Hash, rc::Rc};
 
 /// A WME represents a piece of state in the system.
@@ -11,7 +11,7 @@ use std::{hash::Hash, rc::Rc};
 /// Clone is derived solely for the initial setup of a WME, it should not be cloned
 /// once in the system. WMEs are hashed based on their ID and fields and index into
 /// corresponding alpha memories containing them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Wme {
     pub id: usize,
 
@@ -45,9 +45,9 @@ impl Index<usize> for Wme {
 }
 
 impl Wme {
-    pub fn new(id: usize, fields: [usize; 3]) -> Self {
+    pub fn new(fields: [usize; 3]) -> Self {
         Self {
-            id,
+            id: wme_id(),
             fields,
             tokens: vec![],
         }
@@ -70,7 +70,7 @@ impl Wme {
 
 /// Enables for quick splicing of WMEs. Since a single WME could be located
 /// in many alpha memories, this serves as an indirection.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct AlphaMemoryItem {
     pub id: usize,
     pub wme: RcCell<Wme>,
@@ -110,13 +110,13 @@ pub struct TestAtJoinNode {
 /// A token represents a partially matched condition. Whenever beta nodes are left activated,
 /// tokens are created and stored in them and are used by join nodes to perform join tests to determine
 /// whether to propagate the left activation further.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Token {
     pub id: usize,
 
     /// Pointer to the parent token. The dummy token is the only token that doesn't
     /// have a parent
-    pub parent: Option<RcCell<Self>>,
+    pub parent: Option<Weak<RefCell<Self>>>,
 
     /// The WME this token represents that was partially matched
     pub wme: RcCell<Wme>,
@@ -128,10 +128,18 @@ pub struct Token {
     pub children: Vec<RcCell<Self>>,
 }
 
+impl PartialEq for Token {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.wme == other.wme && self.children == other.children
+    }
+}
+
 impl Token {
+    /// Mutably borrows the parent_token and wme to append them to their
+    /// respective lists
     pub fn new(
         node: &RcCell<Node>,
-        parent_token: Option<RcCell<Self>>,
+        parent_token: Option<Weak<RefCell<Self>>>,
         wme: &RcCell<Wme>,
     ) -> RcCell<Self> {
         let token = Self {
@@ -145,13 +153,20 @@ impl Token {
         println!(
             "Creating token {} and appending to token {}",
             token,
-            parent_token.as_ref().map_or(0, |t| t.borrow().id)
+            parent_token
+                .as_ref()
+                .map_or(0, |t| t.upgrade().unwrap().borrow().id)
         );
 
         let token = token.to_cell();
 
         if let Some(parent) = parent_token {
-            parent.borrow_mut().children.push(Rc::clone(&token))
+            parent
+                .upgrade()
+                .unwrap()
+                .borrow_mut()
+                .children
+                .push(Rc::clone(&token))
         }
 
         // Append token to the WME token list for efficient removal
@@ -163,7 +178,7 @@ impl Token {
     pub fn nth_parent(mut token: RcCell<Self>, n: usize) -> RcCell<Self> {
         for _ in 0..n {
             if let Some(ref parent) = Rc::clone(&token).borrow().parent {
-                token = Rc::clone(parent);
+                token = parent.upgrade().unwrap();
             } else {
                 println!("Found {n}th parent token: {}", token.borrow().id);
                 return token;
@@ -173,9 +188,33 @@ impl Token {
         token
     }
 
+    ///
     pub fn delete_self_and_descendants(token: RcCell<Self>) {
-        let tok = &mut *token.borrow_mut();
+        println!(
+            "Deleting token {}, refs: {}",
+            token.borrow(),
+            Rc::strong_count(&token)
+        );
+        let mut tok = token.borrow_mut();
+
+        let id = tok.id;
+        let parent = tok.parent.take();
         let children = std::mem::take(&mut tok.children);
+        let node = Rc::clone(&tok.node);
+
+        drop(tok);
+
+        node.borrow_mut().remove_token(id);
+
+        if let Some(parent) = parent {
+            parent
+                .upgrade()
+                .unwrap()
+                .borrow_mut()
+                .children
+                .retain(|child| child.borrow().id != id)
+        }
+
         for child in children {
             Self::delete_self_and_descendants(child);
         }

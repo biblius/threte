@@ -1,10 +1,12 @@
+use std::rc::Rc;
+
 use crate::{
     id::{alpha_node_id, beta_node_id},
     item::{AlphaMemoryItem, Condition, TestAtJoinNode, Token},
     IntoCell, IntoNodeCell, RcCell,
 };
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Node {
     Beta(BetaMemoryNode),
     Join(JoinNode),
@@ -65,11 +67,18 @@ impl Node {
             _ => panic!("Node cannot contain tokens"),
         }
     }
+
+    pub fn remove_token(&mut self, id: usize) {
+        match self {
+            Node::Beta(beta) => beta.items.retain(|tok| tok.borrow().id != id),
+            _ => panic!("Node cannot contain tokens"),
+        }
+    }
 }
 
 /// An AlphaMemoryNode contains items through which it keeps the state of WMEs that
 /// passed constant tests.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AlphaMemoryNode {
     pub id: usize,
     pub items: Vec<RcCell<AlphaMemoryItem>>,
@@ -88,7 +97,13 @@ impl AlphaMemoryNode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl PartialEq for AlphaMemoryNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+#[derive(Debug)]
 pub struct BetaMemoryNode {
     pub id: usize,
     pub parent: Option<RcCell<Node>>,
@@ -107,7 +122,7 @@ impl BetaMemoryNode {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct JoinNode {
     pub id: usize,
     pub parent: RcCell<Node>,
@@ -132,14 +147,28 @@ impl JoinNode {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct ProductionNode {
     pub id: usize,
     pub parent: RcCell<Node>,
     pub production: Production,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+impl ProductionNode {
+    pub fn new(prod: Production, parent: &RcCell<Node>) -> Self {
+        let node = Self {
+            id: prod.id,
+            parent: Rc::clone(parent),
+            production: prod,
+        };
+
+        println!("Created production node {node}");
+
+        node
+    }
+}
+
+#[derive(Debug)]
 pub struct Production {
     pub id: usize,
     pub conditions: Vec<Condition>,

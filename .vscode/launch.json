@@ -7,16 +7,16 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug unit tests in library 'rustle'",
+      "name": "Debug unit tests in library 'threte'",
       "cargo": {
         "args": [
           "test",
           "--no-run",
           "--lib",
-          "--package=rustle"
+          "--package=threte"
         ],
         "filter": {
-          "name": "rustle",
+          "name": "threte",
           "kind": "lib"
         }
       },

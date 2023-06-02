@@ -1,0 +1,13 @@
+WMES
+
+
+TOKENS
+
+Token { id: 0, parent: None, wme: [0, 0, 0], node: 0, children: [] }, refs: 4
+
+BETA NETWORK
+
+Beta { id: 0, items: [0], parent: None, children: [] }
+
+ALPHA NETWORK
+
