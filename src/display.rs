@@ -1,6 +1,6 @@
 use crate::{
     item::{AlphaMemoryItem, ConstantTest, Token, Wme},
-    node::{AlphaMemoryNode, BetaMemoryNode, JoinNode, Node, ProductionNode},
+    node::{AlphaMemoryNode, BetaMemoryNode, JoinNode, NegativeNode, Node, ProductionNode},
     RcCell, Rete,
 };
 use std::{
@@ -55,6 +55,9 @@ impl Display for Node {
             Node::Join(join) => {
                 write!(f, "{}", join)
             }
+            Node::Negative(negative) => {
+                write!(f, "{}", negative)
+            }
             Node::Production(prod) => {
                 write!(f, "{}", prod)
             }
@@ -65,6 +68,12 @@ impl Display for Node {
 impl Display for ProductionNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "Prod {{ id: {} }}", self.id,)
+    }
+}
+
+impl Display for NegativeNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "Negative {{ id: {} }}", self.id,)
     }
 }
 
@@ -108,9 +117,7 @@ impl Display for Token {
             f,
             "Token {{ id: {}, parent: {:?}, wme: {:?}, node: {}, children: {:?} }}",
             self.id,
-            self.parent
-                .as_ref()
-                .map(|t| t.upgrade().unwrap().borrow().id),
+            self.parent.as_ref().map(|t| t.borrow().id),
             self.wme.borrow().fields,
             self.node
                 .try_borrow()
@@ -147,6 +154,9 @@ impl Rete {
         let mut buf = match std::fs::read_to_string("printed") {
             Ok(buf) => buf,
             Err(_) => {
+                if path.contains('/') {
+                    std::fs::create_dir_all(path.split_at(path.rfind('/').unwrap()).0).unwrap();
+                }
                 std::fs::write(path, "").unwrap();
                 std::fs::read_to_string(path).unwrap()
             }
@@ -159,8 +169,18 @@ impl Rete {
         write_beta_network(&mut buf, self.dummy_top_node.clone());
         writeln!(buf, "\nALPHA NETWORK\n").unwrap();
         write_alpha_network(&mut buf, &self.constant_tests);
+        writeln!(buf, "\nPRODUCTIONS\n").unwrap();
+        write_productions(&mut buf, &self.productions);
         std::fs::write(path, buf)?;
         Ok(())
+    }
+}
+
+fn write_productions(buf: &mut String, prods: &HashMap<usize, RcCell<Node>>) {
+    let mut items = prods.iter().collect::<Vec<_>>();
+    items.sort_by(|a, b| a.0.cmp(b.0));
+    for (_, prod_node) in items {
+        writeln!(buf, "{}", prod_node.borrow()).unwrap();
     }
 }
 
@@ -202,11 +222,7 @@ fn write_tokens(buf: &mut String, token: RcCell<Token>) {
     writeln!(
         buf,
         "{}{}, refs: {}",
-        " ".repeat(
-            tok.parent
-                .as_ref()
-                .map_or(0, |p| p.upgrade().unwrap().borrow().id * 2)
-        ),
+        " ".repeat(tok.parent.as_ref().map_or(0, |p| p.borrow().id * 2)),
         tok,
         Rc::strong_count(&token)
     )

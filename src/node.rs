@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::{
     id::{alpha_node_id, beta_node_id},
-    item::{AlphaMemoryItem, Condition, TestAtJoinNode, Token},
+    item::{AlphaMemoryItem, Production, TestAtJoinNode, Token},
     IntoCell, IntoNodeCell, RcCell,
 };
 
@@ -11,6 +11,7 @@ pub enum Node {
     Beta(BetaMemoryNode),
     Join(JoinNode),
     Production(ProductionNode),
+    Negative(NegativeNode),
 }
 
 impl Node {
@@ -18,6 +19,7 @@ impl Node {
         match self {
             Node::Beta(beta) => beta.id,
             Node::Join(join) => join.id,
+            Node::Negative(negative) => negative.id,
             Node::Production(ProductionNode { production, .. }) => production.id,
         }
     }
@@ -26,6 +28,7 @@ impl Node {
         match self {
             Node::Beta(_) => "beta",
             Node::Join(_) => "join",
+            Node::Negative(_) => "negative",
             Node::Production(_) => "prod",
         }
     }
@@ -42,6 +45,7 @@ impl Node {
         match self {
             Node::Beta(node) => node.parent.clone(),
             Node::Join(node) => Some(node.parent.clone()),
+            Node::Negative(node) => Some(node.parent.clone()),
             Node::Production(node) => Some(node.parent.clone()),
         }
     }
@@ -54,31 +58,41 @@ impl Node {
                     node.borrow().id(),
                     beta.id
                 );
-                beta.children.push(node.clone())
+                beta.children.push(Rc::clone(node))
             }
-            Node::Join(ref mut join) => join.children.push(node.clone()),
-            Node::Production(_) => panic!("Production node cannot have children"),
+            Node::Join(ref mut join) => join.children.push(Rc::clone(node)),
+            Node::Negative(ref mut negative) => negative.children.push(Rc::clone(node)),
+            Node::Production(_) => unreachable!("Production Node cannot have children"),
+        }
+    }
+
+    pub fn remove_child(&mut self, id: usize) {
+        match self {
+            Node::Beta(beta) => beta.children.retain(|child| child.borrow().id() != id),
+            Node::Join(join) => join.children.retain(|child| child.borrow().id() != id),
+            Node::Negative(negative) => negative.children.retain(|child| child.borrow().id() != id),
+            Node::Production(_) => unreachable!("Production Node cannot have children"),
         }
     }
 
     pub fn add_token(&mut self, token: &RcCell<Token>) {
         match self {
             Node::Beta(beta) => beta.items.push(token.clone()),
-            _ => panic!("Node cannot contain tokens"),
+            _ => unreachable!("Node cannot contain tokens"),
         }
     }
 
     pub fn remove_token(&mut self, id: usize) {
         match self {
             Node::Beta(beta) => beta.items.retain(|tok| tok.borrow().id != id),
-            _ => panic!("Node cannot contain tokens"),
+            _ => unreachable!("Node cannot contain tokens"),
         }
     }
 }
 
 /// An AlphaMemoryNode contains items through which it keeps the state of WMEs that
 /// passed constant tests.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct AlphaMemoryNode {
     pub id: usize,
     pub items: Vec<RcCell<AlphaMemoryItem>>,
@@ -92,7 +106,7 @@ impl AlphaMemoryNode {
             items: vec![],
             successors: vec![],
         };
-        println!("Created Alpha Memory: {}", am);
+        println!("Created Alpha Memory: {am}");
         am
     }
 }
@@ -168,10 +182,27 @@ impl ProductionNode {
     }
 }
 
+/// Negative nodes test for the absence of a certain WME in the working memory and act
+/// like a combination of a Beta and Join node.
+/// They keep a local memory of tokens like Beta nodes and only propagate the
+/// activation when those tokens do NOT pass the join tests.
 #[derive(Debug)]
-pub struct Production {
+pub struct NegativeNode {
     pub id: usize,
-    pub conditions: Vec<Condition>,
+    pub items: Vec<RcCell<Token>>,
+    pub alpha_mem: RcCell<AlphaMemoryNode>,
+    pub tests: Vec<TestAtJoinNode>,
+    pub parent: RcCell<Node>,
+    pub children: Vec<RcCell<Node>>,
+}
+
+impl PartialEq for NegativeNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.items == other.items
+            && self.alpha_mem == other.alpha_mem
+            && self.tests == other.tests
+    }
 }
 
 impl IntoCell for AlphaMemoryNode {}

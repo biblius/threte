@@ -1,0 +1,40 @@
+WMES
+
+WME { id: 1, fields: [0, 10, 1], tokens: ["1"] }
+
+TOKENS
+
+Token { id: 0, parent: None, wme: [0, 0, 0], node: 0, children: ["1"] }, refs: 5
+Token { id: 1, parent: Some(0), wme: [0, 10, 1], node: 2, children: [] }, refs: 4
+
+BETA NETWORK
+
+Beta { id: 0, items: [0], parent: None, children: [1] }
+Join { id: 1, parent: 0, children: [2] }
+  Beta { id: 2, items: [1], parent: Some(1), children: [3] }
+    Join { id: 3, parent: 2, children: [4] }
+      Beta { id: 4, items: [], parent: Some(3), children: [5, 6] }
+        Join { id: 5, parent: 4, children: [9000] }
+          Prod { id: 9000 }
+        Join { id: 6, parent: 4, children: [9001] }
+            Prod { id: 9001 }
+
+ALPHA NETWORK
+
+ConstantTest([None, Some(10), None]) :
+Alpha { id: 0, successors: ["1"], items: 23, }
+
+ConstantTest([None, Some(12), None]) :
+Alpha { id: 1, successors: ["3"], items:  }
+
+ConstantTest([None, Some(11), Some(20)]) :
+Alpha { id: 2, successors: ["5"], items:  }
+
+ConstantTest([None, Some(11), Some(23)]) :
+Alpha { id: 3, successors: ["6"], items:  }
+
+
+PRODUCTIONS
+
+Prod { id: 9000 }
+Prod { id: 9001 }

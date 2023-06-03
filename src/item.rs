@@ -3,15 +3,15 @@ use crate::{
     node::{AlphaMemoryNode, Node},
     IntoCell, RcCell,
 };
-use std::{cell::RefCell, ops::Index, rc::Weak};
+use std::ops::Index;
 use std::{hash::Hash, rc::Rc};
 
 /// A WME represents a piece of state in the system.
 ///
-/// Clone is derived solely for the initial setup of a WME, it should not be cloned
-/// once in the system. WMEs are hashed based on their ID and fields and index into
-/// corresponding alpha memories containing them.
-#[derive(Debug, Clone, PartialEq)]
+/// WMEs are hashed based on their ID and index into
+/// corresponding alpha memories containing them, which eliminates the need
+/// to store a pointer to the memories on the actual WME.
+#[derive(Debug, PartialEq)]
 pub struct Wme {
     pub id: usize,
 
@@ -20,6 +20,33 @@ pub struct Wme {
 
     /// Tokens which contain this WME as their element
     pub tokens: Vec<RcCell<Token>>,
+
+    pub negative_join_results: Vec<RcCell<NegativeJoinResult>>,
+}
+
+impl Wme {
+    pub fn new(fields: [usize; 3]) -> Self {
+        Self {
+            id: wme_id(),
+            fields,
+            tokens: vec![],
+            negative_join_results: vec![],
+        }
+    }
+    #[rustfmt::skip]
+    pub fn permutations(&self) -> impl Iterator<Item = ConstantTest> {
+        [
+            ConstantTest([Some(self[0]), Some(self[1]), Some(self[2])]),
+            ConstantTest([Some(self[0]), Some(self[1]), None]),
+            ConstantTest([Some(self[0]), None,          Some(self[2])]),
+            ConstantTest([Some(self[0]), None,          None]),
+            ConstantTest([None,          Some(self[1]), Some(self[2])]),
+            ConstantTest([None,          Some(self[1]), None]),
+            ConstantTest([None,          None,          Some(self[2])]),
+            ConstantTest([None,          None,          None]),
+        ]
+        .into_iter()
+    }
 }
 
 impl IntoCell for Wme {}
@@ -41,30 +68,6 @@ impl Index<usize> for Wme {
             2 => &self.fields[2],
             _ => panic!("WMEs cannot be indexed by indices higher than 2"),
         }
-    }
-}
-
-impl Wme {
-    pub fn new(fields: [usize; 3]) -> Self {
-        Self {
-            id: wme_id(),
-            fields,
-            tokens: vec![],
-        }
-    }
-    #[rustfmt::skip]
-    pub fn permutations(&self) -> impl Iterator<Item = ConstantTest> {
-        [
-            ConstantTest([Some(self[0]), Some(self[1]), Some(self[2])]),
-            ConstantTest([Some(self[0]), Some(self[1]), None]),
-            ConstantTest([Some(self[0]), None,          Some(self[2])]),
-            ConstantTest([Some(self[0]), None,          None]),
-            ConstantTest([None,          Some(self[1]), Some(self[2])]),
-            ConstantTest([None,          Some(self[1]), None]),
-            ConstantTest([None,          None,          Some(self[2])]),
-            ConstantTest([None,          None,          None]),
-        ]
-        .into_iter()
     }
 }
 
@@ -91,6 +94,8 @@ impl IntoCell for AlphaMemoryItem {}
 
 /// Specifies the locations of the two fields whose values must be
 /// equal in order for some variable to be bound consistently.
+///
+/// These are stored by beta nodes and are used to perform join tests.
 #[derive(Debug, Eq, PartialEq)]
 pub struct TestAtJoinNode {
     /// An index that ultimately indexes into a WME from the Alpha memory connected
@@ -116,7 +121,7 @@ pub struct Token {
 
     /// Pointer to the parent token. The dummy token is the only token that doesn't
     /// have a parent
-    pub parent: Option<Weak<RefCell<Self>>>,
+    pub parent: Option<RcCell<Self>>,
 
     /// The WME this token represents that was partially matched
     pub wme: RcCell<Wme>,
@@ -126,6 +131,8 @@ pub struct Token {
 
     /// List of pointers to this token's children
     pub children: Vec<RcCell<Self>>,
+
+    pub join_results: Vec<RcCell<NegativeJoinResult>>,
 }
 
 impl PartialEq for Token {
@@ -139,34 +146,28 @@ impl Token {
     /// respective lists
     pub fn new(
         node: &RcCell<Node>,
-        parent_token: Option<Weak<RefCell<Self>>>,
+        parent_token: Option<&RcCell<Self>>,
         wme: &RcCell<Wme>,
     ) -> RcCell<Self> {
         let token = Self {
             id: token_id(),
-            parent: parent_token.clone(),
+            parent: parent_token.cloned(),
             wme: Rc::clone(wme),
             node: node.clone(),
             children: vec![],
+            join_results: vec![],
         };
 
         println!(
             "Creating token {} and appending to token {}",
             token,
-            parent_token
-                .as_ref()
-                .map_or(0, |t| t.upgrade().unwrap().borrow().id)
+            parent_token.as_ref().map_or(0, |t| t.borrow().id)
         );
 
         let token = token.to_cell();
 
         if let Some(parent) = parent_token {
-            parent
-                .upgrade()
-                .unwrap()
-                .borrow_mut()
-                .children
-                .push(Rc::clone(&token))
+            parent.borrow_mut().children.push(Rc::clone(&token))
         }
 
         // Append token to the WME token list for efficient removal
@@ -178,7 +179,7 @@ impl Token {
     pub fn nth_parent(mut token: RcCell<Self>, n: usize) -> RcCell<Self> {
         for _ in 0..n {
             if let Some(ref parent) = Rc::clone(&token).borrow().parent {
-                token = parent.upgrade().unwrap();
+                token = Rc::clone(parent)
             } else {
                 println!("Found {n}th parent token: {}", token.borrow().id);
                 return token;
@@ -208,8 +209,6 @@ impl Token {
 
         if let Some(parent) = parent {
             parent
-                .upgrade()
-                .unwrap()
                 .borrow_mut()
                 .children
                 .retain(|child| child.borrow().id != id)
@@ -252,6 +251,12 @@ impl From<ConditionTest> for Option<usize> {
     }
 }
 
+#[derive(Debug)]
+pub struct Production {
+    pub id: usize,
+    pub conditions: Vec<Condition>,
+}
+
 /// A test for a single symbol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConditionTest {
@@ -278,3 +283,23 @@ impl Condition {
             })
     }
 }
+
+#[derive(Debug, PartialEq)]
+pub struct NegativeJoinResult {
+    /// The token in whose local memory this result resides in
+    owner: RcCell<Token>,
+
+    /// The WME that matches the owner
+    wme: RcCell<Wme>,
+}
+
+impl NegativeJoinResult {
+    pub fn new(owner: &RcCell<Token>, wme: &RcCell<Wme>) -> Self {
+        Self {
+            owner: Rc::clone(owner),
+            wme: Rc::clone(wme),
+        }
+    }
+}
+
+impl IntoCell for NegativeJoinResult {}
