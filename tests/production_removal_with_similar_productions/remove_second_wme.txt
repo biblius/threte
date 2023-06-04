@@ -3,7 +3,7 @@ WMES
 
 TOKENS
 
-Token { id: 0, parent: None, wme: [0, 0, 0], node: 0, children: [] }, refs: 4
+Token { id: 0, parent: None, wme: None, node: 0, children: [] }, refs: 3
 
 BETA NETWORK
 

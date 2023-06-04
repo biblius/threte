@@ -123,8 +123,9 @@ pub struct Token {
     /// have a parent
     pub parent: Option<RcCell<Self>>,
 
-    /// The WME this token represents that was partially matched
-    pub wme: RcCell<Wme>,
+    /// The WME this token represents that was partially matched. If the WME is None, the token
+    /// represents a Negative Node token
+    pub wme: Option<RcCell<Wme>>,
 
     /// The Beta Node this token belongs to
     pub node: RcCell<Node>,
@@ -132,7 +133,7 @@ pub struct Token {
     /// List of pointers to this token's children
     pub children: Vec<RcCell<Self>>,
 
-    pub join_results: Vec<RcCell<NegativeJoinResult>>,
+    pub negative_join_results: Vec<RcCell<NegativeJoinResult>>,
 }
 
 impl PartialEq for Token {
@@ -147,15 +148,15 @@ impl Token {
     pub fn new(
         node: &RcCell<Node>,
         parent_token: Option<&RcCell<Self>>,
-        wme: &RcCell<Wme>,
+        wme: Option<&RcCell<Wme>>,
     ) -> RcCell<Self> {
         let token = Self {
             id: token_id(),
             parent: parent_token.cloned(),
-            wme: Rc::clone(wme),
+            wme: wme.cloned(),
             node: node.clone(),
             children: vec![],
-            join_results: vec![],
+            negative_join_results: vec![],
         };
 
         println!(
@@ -171,7 +172,9 @@ impl Token {
         }
 
         // Append token to the WME token list for efficient removal
-        wme.borrow_mut().tokens.push(Rc::clone(&token));
+        if let Some(wme) = wme {
+            wme.borrow_mut().tokens.push(Rc::clone(&token));
+        }
 
         token
     }
@@ -189,32 +192,59 @@ impl Token {
         token
     }
 
-    ///
+    /// Clean up the token and any of its descendants from the WME linked to it, its parent,
+    /// and the node it is stored in.
     pub fn delete_self_and_descendants(token: RcCell<Self>) {
         println!(
             "Deleting token {}, refs: {}",
             token.borrow(),
             Rc::strong_count(&token)
         );
+
         let mut tok = token.borrow_mut();
 
         let id = tok.id;
         let parent = tok.parent.take();
-        let children = std::mem::take(&mut tok.children);
+        let wme = tok.wme.take();
         let node = Rc::clone(&tok.node);
+        let children = std::mem::take(&mut tok.children);
+        let negative_joins = std::mem::take(&mut tok.negative_join_results);
 
         drop(tok);
 
+        println!("Deleting descendants of token {id}");
+        Self::delete_descendants(children);
+
         node.borrow_mut().remove_token(id);
 
+        if let Node::Negative(_) = &*node.borrow() {
+            for result in negative_joins {
+                result
+                    .borrow()
+                    .wme
+                    .borrow_mut()
+                    .negative_join_results
+                    .retain(|res| res.borrow().id != result.borrow().id)
+            }
+        }
+
+        if let Some(ref wme) = wme {
+            println!("Removing token {id} from wme {}", wme.borrow().id);
+            wme.borrow_mut().tokens.retain(|tok| tok.borrow().id != id)
+        }
+
         if let Some(parent) = parent {
+            println!("Removing token {id} from parent {}", parent.borrow().id);
             parent
                 .borrow_mut()
                 .children
                 .retain(|child| child.borrow().id != id)
         }
+    }
 
-        for child in children {
+    #[inline]
+    pub fn delete_descendants(mut children: Vec<RcCell<Token>>) {
+        while let Some(child) = children.pop() {
             Self::delete_self_and_descendants(child);
         }
     }
@@ -268,7 +298,7 @@ pub enum ConditionTest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Condition(pub [ConditionTest; 3]);
+pub struct Condition(pub [ConditionTest; 3]); // TODO: make this contain info about pos/neg
 
 impl Condition {
     /// Returns an iterator over only the variable tests, along with
@@ -282,20 +312,33 @@ impl Condition {
                 ConditionTest::Constant(_) => None,
             })
     }
+
+    pub fn _type(&self) -> ConditionType {
+        ConditionType::Positive // TODO
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ConditionType {
+    Positive,
+    Negative,
+    NegativeConjunction,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct NegativeJoinResult {
+    pub id: usize,
     /// The token in whose local memory this result resides in
-    owner: RcCell<Token>,
+    pub owner: RcCell<Token>,
 
     /// The WME that matches the owner
-    wme: RcCell<Wme>,
+    pub wme: RcCell<Wme>,
 }
 
 impl NegativeJoinResult {
     pub fn new(owner: &RcCell<Token>, wme: &RcCell<Wme>) -> Self {
         Self {
+            id: item_id(),
             owner: Rc::clone(owner),
             wme: Rc::clone(wme),
         }

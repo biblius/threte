@@ -1,13 +1,13 @@
 WMES
 
-WME { id: 1, fields: [0, 10, 1], tokens: ["1"] }
-WME { id: 2, fields: [1, 12, 2], tokens: ["2"] }
+WME { id: 0, fields: [0, 10, 1], tokens: ["1"] }
+WME { id: 1, fields: [1, 12, 2], tokens: ["2"] }
 
 TOKENS
 
-Token { id: 0, parent: None, wme: [0, 0, 0], node: 0, children: ["1"] }, refs: 5
-Token { id: 1, parent: Some(0), wme: [0, 10, 1], node: 2, children: ["2"] }, refs: 5
-  Token { id: 2, parent: Some(1), wme: [1, 12, 2], node: 4, children: [] }, refs: 4
+Token { id: 0, parent: None, wme: None, node: 0, children: ["1"] }, refs: 4
+Token { id: 1, parent: Some("0"), wme: Some([0, 10, 1]), node: 2, children: ["2"] }, refs: 5
+  Token { id: 2, parent: Some("1"), wme: Some([1, 12, 2]), node: 4, children: [] }, refs: 4
 
 BETA NETWORK
 

@@ -117,8 +117,12 @@ impl Display for Token {
             f,
             "Token {{ id: {}, parent: {:?}, wme: {:?}, node: {}, children: {:?} }}",
             self.id,
-            self.parent.as_ref().map(|t| t.borrow().id),
-            self.wme.borrow().fields,
+            self.parent.as_ref().map(|t| t
+                .try_borrow()
+                .map_or("borrowed".to_string(), |t| t.id.to_string())),
+            self.wme
+                .as_ref()
+                .map(|wme| wme.try_borrow().map_or([0, 0, 0], |wme| wme.fields)), // TODO
             self.node
                 .try_borrow()
                 .map_or("borrowed".to_string(), |n| n.id().to_string()),

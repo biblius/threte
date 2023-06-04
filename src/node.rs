@@ -83,6 +83,7 @@ impl Node {
     }
 
     pub fn remove_token(&mut self, id: usize) {
+        println!("Node {} removing token {}", self.id(), id);
         match self {
             Node::Beta(beta) => beta.items.retain(|tok| tok.borrow().id != id),
             _ => unreachable!("Node cannot contain tokens"),
@@ -196,6 +197,23 @@ pub struct NegativeNode {
     pub children: Vec<RcCell<Node>>,
 }
 
+impl NegativeNode {
+    pub fn new(
+        parent: &RcCell<Node>,
+        alpha_mem: &RcCell<AlphaMemoryNode>,
+        tests: Vec<TestAtJoinNode>,
+    ) -> Self {
+        Self {
+            id: beta_node_id(),
+            items: vec![],
+            alpha_mem: Rc::clone(alpha_mem),
+            tests,
+            parent: Rc::clone(parent),
+            children: vec![],
+        }
+    }
+}
+
 impl PartialEq for NegativeNode {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -220,5 +238,11 @@ impl IntoNodeCell for JoinNode {
 impl IntoNodeCell for ProductionNode {
     fn to_node_cell(self) -> RcCell<Node> {
         std::rc::Rc::new(std::cell::RefCell::new(Node::Production(self)))
+    }
+}
+
+impl IntoNodeCell for NegativeNode {
+    fn to_node_cell(self) -> RcCell<Node> {
+        std::rc::Rc::new(std::cell::RefCell::new(Node::Negative(self)))
     }
 }
