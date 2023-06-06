@@ -86,6 +86,7 @@ impl Node {
         println!("Node {} removing token {}", self.id(), id);
         match self {
             Node::Beta(beta) => beta.items.retain(|tok| tok.borrow().id != id),
+            Node::Negative(negative) => negative.items.retain(|tok| tok.borrow().id != id),
             _ => unreachable!("Node cannot contain tokens"),
         }
     }

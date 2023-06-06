@@ -24,10 +24,10 @@ Join { id: 1, parent: 0, children: [2] }
 ALPHA NETWORK
 
 ConstantTest([None, Some(10), None]) :
-Alpha { id: 0, successors: ["1"], items: 23, }
+Alpha { id: 0, successors: ["1"], items: 25, }
 
 ConstantTest([None, Some(12), None]) :
-Alpha { id: 1, successors: ["3"], items: 24, }
+Alpha { id: 1, successors: ["3"], items: 26, }
 
 ConstantTest([None, Some(11), Some(20)]) :
 Alpha { id: 2, successors: ["5"], items:  }

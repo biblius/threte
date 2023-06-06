@@ -307,10 +307,6 @@ fn production_removal_with_similar_productions() {
     const Y: usize = 1;
     const Z: usize = 2;
 
-    const V_X: ConditionTest = ConditionTest::Variable(0);
-    const V_Y: ConditionTest = ConditionTest::Variable(1);
-    const V_Z: ConditionTest = ConditionTest::Variable(2);
-
     const C1: Condition = Condition::new(ConditionType::Positive, [V_X, C_ON, V_Y]);
     const C2: Condition = Condition::new(ConditionType::Positive, [V_Y, C_LEFT_OF, V_Z]);
     const C3: Condition = Condition::new(ConditionType::Positive, [V_Z, C_COLOR, C_RED]);
@@ -362,6 +358,48 @@ fn production_removal_with_similar_productions() {
         .unwrap();
 
     assert!(rete.working_memory.is_empty());
+    assert!(rete.dummy_top_token.borrow().children.is_empty());
+    assert!(rete.productions.is_empty());
+
+    reset();
+}
+
+#[test]
+fn add_remove_negative_node() {
+    const X: usize = 0;
+    const Y: usize = 1;
+    const Z: usize = 2;
+
+    const C1: Condition = Condition::new(ConditionType::Positive, [V_X, C_ON, V_Y]);
+    const C2: Condition = Condition::new(ConditionType::Positive, [V_Y, C_LEFT_OF, V_Z]);
+    const C3: Condition = Condition::new(ConditionType::Negative, [V_Z, C_COLOR, C_RED]);
+
+    const W1: [usize; 3] = [X, ON, Y];
+    const W2: [usize; 3] = [Y, LEFT_OF, Z];
+    const W3: [usize; 3] = [Z, COLOR, BLUE];
+
+    let mut rete = Rete::default();
+
+    let production_1 = Production {
+        id: 9000,
+        conditions: vec![C1, C2, C3],
+    };
+
+    let prod_id1 = rete.add_production(production_1);
+    assert_eq!(rete.productions.len(), 1);
+
+    rete.add_wme(W1);
+    rete.add_wme(W2);
+    rete.add_wme(W3);
+
+    rete.print_to_file("tests/add_remove_negative_node/initial.txt")
+        .unwrap();
+
+    rete.remove_production(prod_id1);
+
+    rete.print_to_file("tests/add_remove_negative_node/remove_production.txt")
+        .unwrap();
+
     assert!(rete.dummy_top_token.borrow().children.is_empty());
     assert!(rete.productions.is_empty());
 

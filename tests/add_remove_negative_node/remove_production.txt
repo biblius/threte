@@ -1,0 +1,19 @@
+WMES
+
+WME { id: 0, fields: [0, 10, 1], tokens: [] }
+WME { id: 1, fields: [1, 12, 2], tokens: [] }
+WME { id: 2, fields: [2, 11, 23], tokens: [] }
+
+TOKENS
+
+Token { id: 0, parent: None, wme: None, node: 0, children: [] }, refs: 2
+
+BETA NETWORK
+
+Beta { id: 0, items: [], parent: None, children: [] }
+
+ALPHA NETWORK
+
+
+PRODUCTIONS
+
