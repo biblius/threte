@@ -690,11 +690,14 @@ mod tests {
     #[test]
     fn it_works() {
         let mut rete = Rete::new();
-        let conditions = Vec::from([Condition([
-            ConditionTest::Variable(1),
-            ConditionTest::Constant(2),
-            ConditionTest::Variable(3),
-        ])]);
+        let conditions = Vec::from([Condition::new(
+            ConditionType::Positive,
+            [
+                ConditionTest::Variable(1),
+                ConditionTest::Constant(2),
+                ConditionTest::Variable(3),
+            ],
+        )]);
         rete.add_production(Production { id: 1, conditions });
         rete.add_wme([1, 2, 3]);
     }
@@ -702,10 +705,19 @@ mod tests {
     #[test]
     fn join_test_to_condition() {
         use ConditionTest::*;
-        let condition = Condition([Variable(2), Variable(3), Variable(4)]);
+        let condition = Condition::new(
+            ConditionType::Positive,
+            [Variable(2), Variable(3), Variable(4)],
+        );
         let previous = &[
-            Condition([Variable(1), Variable(1), Variable(2)]),
-            Condition([Variable(5), Variable(6), Variable(3)]),
+            Condition::new(
+                ConditionType::Positive,
+                [Variable(1), Variable(1), Variable(2)],
+            ),
+            Condition::new(
+                ConditionType::Positive,
+                [Variable(5), Variable(6), Variable(3)],
+            ),
         ];
         let test_nodes = get_join_tests_from_condition(&condition, previous);
 
@@ -727,11 +739,23 @@ mod tests {
             }
         );
 
-        let c = Condition([Variable(1), Constant(0), Variable(2)]);
+        let c = Condition::new(
+            ConditionType::Positive,
+            [Variable(1), Constant(0), Variable(2)],
+        );
         let earlier = vec![
-            Condition([Variable(3), Constant(1), Variable(5)]),
-            Condition([Variable(1), Constant(0), Variable(7)]),
-            Condition([Variable(6), Constant(0), Variable(7)]),
+            Condition::new(
+                ConditionType::Positive,
+                [Variable(3), Constant(1), Variable(5)],
+            ),
+            Condition::new(
+                ConditionType::Positive,
+                [Variable(1), Constant(0), Variable(7)],
+            ),
+            Condition::new(
+                ConditionType::Positive,
+                [Variable(6), Constant(0), Variable(7)],
+            ),
         ];
 
         let result = get_join_tests_from_condition(&c, &earlier);
@@ -745,11 +769,23 @@ mod tests {
             }
         );
 
-        let c = Condition([Variable(1), Constant(0), Variable(2)]);
+        let c = Condition::new(
+            ConditionType::Positive,
+            [Variable(1), Constant(0), Variable(2)],
+        );
         let earlier = vec![
-            Condition([Variable(3), Constant(1), Variable(5)]),
-            Condition([Variable(2), Constant(0), Variable(7)]),
-            Condition([Variable(6), Constant(0), Variable(1)]),
+            Condition::new(
+                ConditionType::Positive,
+                [Variable(3), Constant(1), Variable(5)],
+            ),
+            Condition::new(
+                ConditionType::Positive,
+                [Variable(2), Constant(0), Variable(7)],
+            ),
+            Condition::new(
+                ConditionType::Positive,
+                [Variable(6), Constant(0), Variable(1)],
+            ),
         ];
 
         let result = get_join_tests_from_condition(&c, &earlier);

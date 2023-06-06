@@ -267,8 +267,12 @@ impl ConstantTest {
 }
 
 impl From<Condition> for ConstantTest {
-    fn from(value: Condition) -> Self {
-        Self([value.0[0].into(), value.0[1].into(), value.0[2].into()])
+    fn from(condition: Condition) -> Self {
+        Self([
+            condition.tests[0].into(),
+            condition.tests[1].into(),
+            condition.tests[2].into(),
+        ])
     }
 }
 
@@ -288,7 +292,7 @@ pub struct Production {
 }
 
 /// A test for a single symbol.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConditionTest {
     /// Test for a symbol with the given ID.
     Constant(usize),
@@ -297,14 +301,20 @@ pub enum ConditionTest {
     Variable(usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Condition(pub [ConditionTest; 3]); // TODO: make this contain info about pos/neg
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Condition {
+    pub _type: ConditionType,
+    pub tests: [ConditionTest; 3],
+}
 
 impl Condition {
+    pub const fn new(_type: ConditionType, tests: [ConditionTest; 3]) -> Self {
+        Self { _type, tests }
+    }
     /// Returns an iterator over only the variable tests, along with
     /// their indices.
     pub fn variables(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        self.0
+        self.tests
             .iter()
             .enumerate()
             .filter_map(|(i, test)| match test {
@@ -314,11 +324,11 @@ impl Condition {
     }
 
     pub fn _type(&self) -> ConditionType {
-        ConditionType::Positive // TODO
+        self._type
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConditionType {
     Positive,
     Negative,

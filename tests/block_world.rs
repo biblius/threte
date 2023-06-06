@@ -1,6 +1,6 @@
 use threte::{
     id::reset,
-    item::{Condition, ConditionTest, Production},
+    item::{Condition, ConditionTest, ConditionType, Production},
     Rete,
 };
 
@@ -43,11 +43,26 @@ const C_RED: ConditionTest = ConditionTest::Constant(RED);
 const C_MAIZE: ConditionTest = ConditionTest::Constant(MAIZE);
 const C_BLUE: ConditionTest = ConditionTest::Constant(BLUE);
 
-const C1: Condition = Condition([V_X, C_ON, V_Y]);
-const C2: Condition = Condition([V_Y, C_LEFT_OF, V_Z]);
-const C3: Condition = Condition([V_Z, C_COLOR, C_RED]);
-const C4: Condition = Condition([V_A, C_COLOR, C_MAIZE]);
-const C5: Condition = Condition([V_B, C_COLOR, C_BLUE]);
+const C1: Condition = Condition {
+    _type: ConditionType::Positive,
+    tests: [V_X, C_ON, V_Y],
+};
+const C2: Condition = Condition {
+    _type: ConditionType::Positive,
+    tests: [V_Y, C_LEFT_OF, V_Z],
+};
+const C3: Condition = Condition {
+    _type: ConditionType::Positive,
+    tests: [V_Z, C_COLOR, C_RED],
+};
+const C4: Condition = Condition {
+    _type: ConditionType::Positive,
+    tests: [V_A, C_COLOR, C_MAIZE],
+};
+const C5: Condition = Condition {
+    _type: ConditionType::Positive,
+    tests: [V_B, C_COLOR, C_BLUE],
+};
 
 fn productions() -> Vec<Production> {
     vec![
@@ -98,12 +113,6 @@ fn add_productions_and_wmes() {
 
 #[test]
 fn add_productions_and_wmes_then_remove() {
-    const C1: Condition = Condition([V_X, C_ON, V_Y]);
-    const C2: Condition = Condition([V_Y, C_LEFT_OF, V_Z]);
-    const C3: Condition = Condition([V_Z, C_COLOR, C_RED]);
-    const C4: Condition = Condition([V_A, C_COLOR, C_MAIZE]);
-    const C5: Condition = Condition([V_B, C_COLOR, C_BLUE]);
-
     let production_one = Production {
         id: 9000,
         conditions: vec![C1, C2, C3],
@@ -148,12 +157,6 @@ fn add_productions_and_wmes_then_remove() {
 
 #[test]
 fn add_wme_then_prod() {
-    const C1: Condition = Condition([V_X, C_ON, V_Y]);
-    const C2: Condition = Condition([V_Y, C_LEFT_OF, V_Z]);
-    const C3: Condition = Condition([V_Z, C_COLOR, C_RED]);
-    const C4: Condition = Condition([V_A, C_COLOR, C_MAIZE]);
-    const C5: Condition = Condition([V_B, C_COLOR, C_BLUE]);
-
     let production_one = Production {
         id: 9000,
         conditions: vec![C1, C2, C3],
@@ -197,19 +200,6 @@ fn wme_removal_with_tokens() {
     const X: usize = 0;
     const Y: usize = 1;
     const Z: usize = 2;
-
-    const V_X: ConditionTest = ConditionTest::Variable(0);
-    const V_Y: ConditionTest = ConditionTest::Variable(1);
-    const V_Z: ConditionTest = ConditionTest::Variable(2);
-
-    const C_ON: ConditionTest = ConditionTest::Constant(ON);
-    const C_LEFT_OF: ConditionTest = ConditionTest::Constant(LEFT_OF);
-    const C_COLOR: ConditionTest = ConditionTest::Constant(COLOR);
-    const C_RED: ConditionTest = ConditionTest::Constant(RED);
-
-    const C1: Condition = Condition([V_X, C_ON, V_Y]);
-    const C2: Condition = Condition([V_Y, C_LEFT_OF, V_Z]);
-    const C3: Condition = Condition([V_Z, C_COLOR, C_RED]);
 
     const W1: [usize; 3] = [X, ON, Y];
     const W2: [usize; 3] = [Y, LEFT_OF, Z];
@@ -271,19 +261,6 @@ fn production_removal_with_tokens() {
     const Y: usize = 1;
     const Z: usize = 2;
 
-    const V_X: ConditionTest = ConditionTest::Variable(0);
-    const V_Y: ConditionTest = ConditionTest::Variable(1);
-    const V_Z: ConditionTest = ConditionTest::Variable(2);
-
-    const C_ON: ConditionTest = ConditionTest::Constant(ON);
-    const C_LEFT_OF: ConditionTest = ConditionTest::Constant(LEFT_OF);
-    const C_COLOR: ConditionTest = ConditionTest::Constant(COLOR);
-    const C_RED: ConditionTest = ConditionTest::Constant(RED);
-
-    const C1: Condition = Condition([V_X, C_ON, V_Y]);
-    const C2: Condition = Condition([V_Y, C_LEFT_OF, V_Z]);
-    const C3: Condition = Condition([V_Z, C_COLOR, C_RED]);
-
     const W1: [usize; 3] = [X, ON, Y];
     const W2: [usize; 3] = [Y, LEFT_OF, Z];
 
@@ -334,10 +311,10 @@ fn production_removal_with_similar_productions() {
     const V_Y: ConditionTest = ConditionTest::Variable(1);
     const V_Z: ConditionTest = ConditionTest::Variable(2);
 
-    const C1: Condition = Condition([V_X, C_ON, V_Y]);
-    const C2: Condition = Condition([V_Y, C_LEFT_OF, V_Z]);
-    const C3: Condition = Condition([V_Z, C_COLOR, C_RED]);
-    const C4: Condition = Condition([V_Z, C_COLOR, C_BLUE]);
+    const C1: Condition = Condition::new(ConditionType::Positive, [V_X, C_ON, V_Y]);
+    const C2: Condition = Condition::new(ConditionType::Positive, [V_Y, C_LEFT_OF, V_Z]);
+    const C3: Condition = Condition::new(ConditionType::Positive, [V_Z, C_COLOR, C_RED]);
+    const C4: Condition = Condition::new(ConditionType::Positive, [V_Z, C_COLOR, C_BLUE]);
 
     const W1: [usize; 3] = [X, ON, Y];
     const W2: [usize; 3] = [Y, LEFT_OF, Z];
