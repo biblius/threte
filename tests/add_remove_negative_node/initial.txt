@@ -17,6 +17,7 @@ Join { id: 1, parent: 0, children: [2] }
   Beta { id: 2, items: [1], parent: Some(1), children: [3] }
     Join { id: 3, parent: 2, children: [4] }
       Negative { id: 4 }
+        Prod { id: 9000 }
 
 ALPHA NETWORK
 

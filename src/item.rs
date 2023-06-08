@@ -71,47 +71,6 @@ impl Index<usize> for Wme {
     }
 }
 
-/// Enables for quick splicing of WMEs. Since a single WME could be located
-/// in many alpha memories, this serves as an indirection.
-#[derive(Debug, PartialEq)]
-pub struct AlphaMemoryItem {
-    pub id: usize,
-    pub wme: RcCell<Wme>,
-    pub alpha_memory: RcCell<AlphaMemoryNode>,
-}
-
-impl AlphaMemoryItem {
-    pub fn new(wme: &RcCell<Wme>, alpha_memory: &RcCell<AlphaMemoryNode>) -> Self {
-        Self {
-            id: item_id(),
-            wme: Rc::clone(wme),
-            alpha_memory: Rc::clone(alpha_memory),
-        }
-    }
-}
-
-impl IntoCell for AlphaMemoryItem {}
-
-/// Specifies the locations of the two fields whose values must be
-/// equal in order for some variable to be bound consistently.
-///
-/// These are stored by beta nodes and are used to perform join tests.
-#[derive(Debug, Eq, PartialEq)]
-pub struct TestAtJoinNode {
-    /// An index that ultimately indexes into a WME from the Alpha memory connected
-    /// to the overlying [JoinNode] of this test node. Compared with `arg_two` to
-    /// tests whether a join should succeed.
-    pub arg_one: usize,
-
-    /// Used to traverse a token's parents to find the WME value
-    /// to compare with the first one.
-    pub distance_to_wme: usize,
-
-    /// An index that ultimately indexes into a WME from the parent [Token]
-    /// found by the `distance_to_wme`
-    pub arg_two: usize,
-}
-
 /// A token represents a partially matched condition. Whenever beta nodes are left activated,
 /// tokens are created and stored in them and are used by join nodes to perform join tests to determine
 /// whether to propagate the left activation further.
@@ -127,13 +86,23 @@ pub struct Token {
     /// represents a Negative Node token
     pub wme: Option<RcCell<Wme>>,
 
-    /// The Beta Node this token belongs to
+    /// The node this token belongs to
     pub node: RcCell<Node>,
 
     /// List of pointers to this token's children
     pub children: Vec<RcCell<Self>>,
 
+    // TODO separate the next three fields into a token variant
+    // as they are only used by negative and ncc nodes
+    /// List of all successful join results performed by negative nodes. This field is used
+    /// solely by negative nodes to determine whether to propagate activations.
     pub negative_join_results: Vec<RcCell<NegativeJoinResult>>,
+
+    /// Solely used by NCC nodes
+    pub ncc_results: Vec<RcCell<Token>>,
+
+    /// An owner token that stores this one in case this one is an NCC partner node token.
+    pub owner: Option<RcCell<Token>>,
 }
 
 impl PartialEq for Token {
@@ -157,6 +126,8 @@ impl Token {
             node: node.clone(),
             children: vec![],
             negative_join_results: vec![],
+            ncc_results: vec![],
+            owner: None,
         };
 
         println!(
@@ -252,7 +223,50 @@ impl Token {
 
 impl IntoCell for Token {}
 
-/// When productions are added to the network, constant tests are created based on the its condition's constants.
+/// Enables for quick splicing of WMEs. Since a single WME could be located
+/// in many alpha memories, this serves as an indirection that points to it.
+/// These are stored by alpha memories whenever a WME enters the network.
+#[derive(Debug, PartialEq)]
+pub struct AlphaMemoryItem {
+    pub id: usize,
+    pub wme: RcCell<Wme>,
+    pub alpha_memory: RcCell<AlphaMemoryNode>,
+}
+
+impl AlphaMemoryItem {
+    pub fn new(wme: &RcCell<Wme>, alpha_memory: &RcCell<AlphaMemoryNode>) -> Self {
+        Self {
+            id: item_id(),
+            wme: Rc::clone(wme),
+            alpha_memory: Rc::clone(alpha_memory),
+        }
+    }
+}
+
+impl IntoCell for AlphaMemoryItem {}
+
+/// Specifies the locations of the two fields whose values must be
+/// equal in order for some variable to be bound consistently.
+///
+/// These are stored by beta nodes and are used to perform join tests.
+#[derive(Debug, Eq, PartialEq)]
+pub struct TestAtJoinNode {
+    /// An index that ultimately indexes into a WME from the Alpha memory connected
+    /// to the overlying [JoinNode] of this test node. Compared with `arg_two` to
+    /// tests whether a join should succeed.
+    pub arg_one: usize,
+
+    /// Used to traverse a token's parents to find the WME value
+    /// to compare with the first one.
+    pub distance_to_wme: usize,
+
+    /// An index that ultimately indexes into a WME from the parent [Token]
+    /// found by the `distance_to_wme`
+    pub arg_two: usize,
+}
+
+/// When productions are added to the network, constant tests are created based on the condition's constants that
+/// index into the appropriate alpha memories for the condition.
 /// If a constant exists in the condition, it will be represented by `Some(constant)` in the test.
 /// A `None` in the constant test represents a wildcard.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -335,6 +349,10 @@ pub enum ConditionType {
     NegativeConjunction,
 }
 
+/// A negative join results represents a successful join test performed by a negative node.
+/// Whenever negative nodes are activated they will perform join tests, just like join nodes,
+/// and will store the result in their corresponding tokens and will propagate the activation further
+/// only if the join tests do NOT pass for the WME in question.
 #[derive(Debug, PartialEq)]
 pub struct NegativeJoinResult {
     pub id: usize,

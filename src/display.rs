@@ -1,6 +1,9 @@
 use crate::{
     item::{AlphaMemoryItem, ConstantTest, Token, Wme},
-    node::{AlphaMemoryNode, BetaMemoryNode, JoinNode, NegativeNode, Node, ProductionNode},
+    node::{
+        AlphaMemoryNode, BetaMemoryNode, JoinNode, NccNode, NccPartnerNode, NegativeNode, Node,
+        ProductionNode,
+    },
     RcCell, Rete,
 };
 use std::{
@@ -60,6 +63,12 @@ impl Display for Node {
             }
             Node::Production(prod) => {
                 write!(f, "{}", prod)
+            }
+            Node::Ncc(ncc) => {
+                write!(f, "{}", ncc)
+            }
+            Node::NccPartner(partner) => {
+                write!(f, "{}", partner)
             }
         }
     }
@@ -133,6 +142,18 @@ impl Display for Token {
                     .map_or("borrowed".to_string(), |t| t.id.to_string()))
                 .collect::<Vec<_>>()
         )
+    }
+}
+
+impl Display for NccNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "NCC {{ id: {} }}", self.id,)
+    }
+}
+
+impl Display for NccPartnerNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "NCC Partner {{ id: {} }}", self.id,)
     }
 }
 
