@@ -4,12 +4,17 @@ pub mod item;
 pub mod node;
 
 use crate::{
-    item::{AlphaMemoryItem, ConditionType},
-    node::{BetaMemoryNode, JoinNode, ProductionNode},
+    item::{AlphaMemoryItem, conditions_to_constant_tests, DUMMY_TOKEN_ID},
+    node::{BetaMemoryNode, JoinNode, NccNode, NccPartnerNode, ProductionNode},
 };
 use item::{Condition, ConstantTest, NegativeJoinResult, Production, TestAtJoinNode, Token, Wme};
-use node::{AlphaMemoryNode, NegativeNode, Node};
+use node::{AlphaMemoryNode, NegativeNode, Node, ReteNode};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+#[derive(Debug)]
+pub enum Error {
+    CondToConstantTest,
+}
 
 type RcCell<T> = Rc<RefCell<T>>;
 
@@ -20,7 +25,7 @@ trait IntoCell: Sized {
 }
 
 trait IntoNodeCell: Sized {
-    fn to_node_cell(self) -> RcCell<Node>;
+    fn to_node_cell(self) -> ReteNode;
 }
 
 #[derive(Debug)]
@@ -29,7 +34,7 @@ pub struct Rete {
     pub dummy_top_token: RcCell<Token>,
 
     /// Beta network root
-    pub dummy_top_node: RcCell<Node>,
+    pub dummy_top_node: ReteNode,
 
     /// Since every WME is represented as a triple, we only need to do 8 hash table look ups whenever one is added to the
     /// network to find possibly matching constant tests for it. This removes the need for a constant test network.
@@ -42,7 +47,7 @@ pub struct Rete {
     pub wme_alphas: HashMap<usize, Vec<RcCell<AlphaMemoryNode>>>,
 
     /// Maps production IDs to their corresponding production nodes
-    pub productions: HashMap<usize, RcCell<Node>>,
+    pub productions: HashMap<usize, ReteNode>,
 }
 
 impl Default for Rete {
@@ -53,11 +58,9 @@ impl Default for Rete {
 
 impl Rete {
     fn new() -> Self {
-        let dummy_top_node = BetaMemoryNode::new(None);
-        println!("Created initial dummy {dummy_top_node}");
-        let dummy_top_node = dummy_top_node.to_node_cell();
+        let dummy_top_node = BetaMemoryNode::dummy();
 
-        let dummy_top_token = Token::new(&dummy_top_node, None, None);
+        let dummy_top_token = Token::dummy(&dummy_top_node);
 
         dummy_top_node.borrow_mut().add_token(&dummy_top_token);
 
@@ -75,7 +78,7 @@ impl Rete {
         let wme = Wme::new(elements);
         let id = wme.id;
 
-        println!("Adding WME {:?}", wme);
+        println!("-----------\nAdding WME {:?}\n-----------", wme);
 
         for element in wme.permutations() {
             let Some(memory) = self.constant_tests.get(&element) else { continue };
@@ -101,8 +104,7 @@ impl Rete {
             return id;
         }
 
-        // Ensure the WME has a corresponding Alpha Node in advance if none is found
-        println!("No memory found for WME {wme:?}");
+        println!("No memory found for WME {wme:?}, inserting to working memory");
 
         let wme = wme.to_cell();
         self.working_memory.insert(id, Rc::clone(&wme));
@@ -160,87 +162,17 @@ impl Rete {
         }
     }
 
-    fn build_or_share_network_for_conditions(
-        &mut self,
-        parent: &RcCell<Node>,
-        conditions: Vec<Condition>,
-        earlier_conds: &mut Vec<Condition>,
-    ) -> RcCell<Node> {
-        let mut current_node = Rc::clone(parent);
-
-        let (first_condition, rest) = conditions
-            .split_first()
-            .expect("Conditions cannot be empty");
-
-        let mut tests = get_join_tests_from_condition(first_condition, earlier_conds);
-        let mut alpha_memory = self.build_or_share_alpha_memory_node(first_condition);
-        current_node = build_or_share_join_node(&current_node, &alpha_memory, tests);
-
-        for condition in rest {
-            println!("Processing condition {:?}", condition);
-
-            match condition._type() {
-                ConditionType::Negative => {
-                    tests = get_join_tests_from_condition(condition, earlier_conds);
-                    alpha_memory = self.build_or_share_alpha_memory_node(condition);
-                    current_node =
-                        build_or_share_negative_node(&current_node, &alpha_memory, tests);
-                }
-                ConditionType::Positive => {
-                    current_node = build_or_share_beta_memory_node(&current_node);
-                    tests = get_join_tests_from_condition(condition, earlier_conds);
-                    alpha_memory = self.build_or_share_alpha_memory_node(condition);
-                    current_node = build_or_share_join_node(&current_node, &alpha_memory, tests);
-                }
-                ConditionType::NegativeConjunction => todo!(),
-            }
-
-            earlier_conds.push(*condition);
-        }
-
-        current_node
-    }
-
-    //    fn build_or_share_ncc_nodes(parent: &RcCell<Node>, condit)
-
     pub fn add_production(&mut self, production: Production) -> usize {
         println!("Adding production {}", production.id);
 
         let id = production.id;
         let conditions = &production.conditions;
 
-        assert!(!conditions.is_empty(), "LHS of production cannot be empty");
-
-        println!("Processing condition {:?}", conditions[0]);
-
-        let mut current_node = Rc::clone(&self.dummy_top_node);
-
-        let mut earlier_conds = vec![];
-
-        let mut tests = get_join_tests_from_condition(&conditions[0], &earlier_conds);
-        let mut alpha_memory = self.build_or_share_alpha_memory_node(&conditions[0]);
-        current_node = build_or_share_join_node(&current_node, &alpha_memory, tests);
-
-        for i in 1..conditions.len() {
-            let condition = &conditions[i];
-            println!("Processing condition {:?}", condition);
-            match condition._type() {
-                ConditionType::Negative => {
-                    tests = get_join_tests_from_condition(condition, &earlier_conds);
-                    alpha_memory = self.build_or_share_alpha_memory_node(condition);
-                    current_node =
-                        build_or_share_negative_node(&current_node, &alpha_memory, tests);
-                }
-                ConditionType::Positive => {
-                    current_node = build_or_share_beta_memory_node(&current_node);
-                    tests = get_join_tests_from_condition(condition, &earlier_conds);
-                    alpha_memory = self.build_or_share_alpha_memory_node(condition);
-                    current_node = build_or_share_join_node(&current_node, &alpha_memory, tests);
-                }
-                ConditionType::NegativeConjunction => todo!(),
-            }
-            earlier_conds.push(conditions[i - 1]);
-        }
+        let current_node = self.build_or_share_network_for_conditions(
+            &Rc::clone(&self.dummy_top_node),
+            conditions,
+            &mut vec![],
+        );
 
         let production = ProductionNode::new(production, &current_node).to_node_cell();
 
@@ -253,31 +185,100 @@ impl Rete {
         id
     }
 
+
     pub fn remove_production(&mut self, id: usize) -> bool {
         let Some(production) = self.productions.remove(&id) else { return false; };
 
         println!("Removing production {}", production.borrow());
 
-        let constant_tests = match &*production.borrow() {
-            Node::Production(prod) => prod
-                .production
-                .conditions
-                .iter()
-                .map(|cond| ConstantTest::from(*cond))
-                .collect::<Vec<_>>(),
-            _ => unreachable!(),
-        };
+        let mut tests = vec![];
+        {
+            let Node::Production(prod) = &*production.borrow() else { panic!("Should not be possible")};
+            conditions_to_constant_tests(&mut tests, &prod.production.conditions);
+        }
 
-        self.delete_node_and_unused_ancestors(production, &constant_tests);
+        self.delete_node_and_unused_ancestors(production, &tests);
 
         true
+    }
+
+    fn build_or_share_network_for_conditions<'a>(
+        &mut self,
+        parent: &ReteNode,
+        conditions: &'a [Condition],
+        earlier_conds: &mut Vec<&'a Condition>,
+    ) -> ReteNode {
+        assert!(!conditions.is_empty(), "LHS of production cannot be empty");
+
+        println!(
+            "Building/sharing network for conditions with parent {}",
+            parent.borrow()
+        );
+
+        let mut current_node = Rc::clone(parent);
+
+        for condition in conditions.iter() {
+            println!("Processing condition {:?}", condition);
+
+            match condition {
+                Condition::Positive { .. } => {
+                    current_node = build_or_share_beta_memory_node(&current_node);
+                    let tests = get_join_tests_from_condition(condition, earlier_conds);
+                    let alpha_memory = self.build_or_share_alpha_memory_node(condition);
+                    current_node = build_or_share_join_node(&current_node, &alpha_memory, tests);
+                }
+                Condition::Negative { .. } => {
+                    let tests = get_join_tests_from_condition(condition, earlier_conds);
+                    let alpha_memory = self.build_or_share_alpha_memory_node(condition);
+                    current_node =
+                        build_or_share_negative_node(&current_node, &alpha_memory, tests);
+                }
+                Condition::NegativeConjunction { subconditions } => {
+                    current_node =
+                        self.build_or_share_ncc_nodes(&current_node, subconditions, earlier_conds)
+                }
+            }
+
+            earlier_conds.push(condition);
+        }
+
+        current_node
+    }
+
+    fn build_or_share_ncc_nodes<'a>(
+        &mut self,
+        parent: &ReteNode,
+        subconditions: &'a [Condition],
+        earlier_conds: &mut Vec<&'a Condition>,
+    ) -> ReteNode {
+        let subnet_bottom =
+            self.build_or_share_network_for_conditions(parent, subconditions, earlier_conds);
+
+        let ncc_node = NccNode::new(parent).to_node_cell();
+        let partner =
+            NccPartnerNode::new(&ncc_node, &subnet_bottom, subconditions.len()).to_node_cell();
+
+        if let Node::Ncc(ncc) = &mut *ncc_node.borrow_mut() {
+            ncc.partner = Some(Rc::clone(&partner))
+        };
+
+        subnet_bottom.borrow_mut().add_child(&partner);
+
+        parent.borrow_mut().add_child(&ncc_node);
+
+        // Update the NCC first, otherwise lots of matches would get mixed together
+        // in the partner's `new_results` buffer
+        update_new_node_with_matches_from_above(&ncc_node);
+        update_new_node_with_matches_from_above(&partner);
+
+        ncc_node
     }
 
     fn build_or_share_alpha_memory_node(
         &mut self,
         condition: &Condition,
     ) -> RcCell<AlphaMemoryNode> {
-        let constant_test = ConstantTest::from(*condition);
+        let constant_test = ConstantTest::try_from(condition).unwrap();
 
         println!("Searching for constant test {constant_test:?}");
 
@@ -292,15 +293,14 @@ impl Rete {
 
         self.constant_tests.insert(constant_test, Rc::clone(&am));
 
-        println!(
-            "Inserting constant test {:?} for AM {}",
-            constant_test,
-            am.borrow().id
-        );
+        println!("Indexing constant test {constant_test:?} to AM {}", am.borrow());
 
+        println!("Searching for matching WMEs for {constant_test:?}");
+        
         for (_, wme) in self.working_memory.iter() {
             let _wme = wme.borrow();
             if constant_test.matches(&_wme) {
+                println!("Found match: {_wme} for constant test {constant_test:?}");
                 let a_mems = self
                     .wme_alphas
                     .entry(_wme.id)
@@ -316,7 +316,7 @@ impl Rete {
 
     fn delete_node_and_unused_ancestors(
         &mut self,
-        node: RcCell<Node>,
+        node: ReteNode,
         constant_tests: &[ConstantTest],
     ) {
         // Used to avoid a mutable reference when recursively deleting node references from tokens
@@ -330,7 +330,10 @@ impl Rete {
                 tokens: Vec<RcCell<Token>>,
             },
             Ncc {
+                partner: ReteNode,
                 ncc_tokens: Vec<RcCell<Token>>,
+            },
+            NccPartner {
                 ncc_partner_tokens: Vec<RcCell<Token>>,
             },
             Production,
@@ -348,14 +351,16 @@ impl Rete {
                 tokens: std::mem::take(&mut negative.items),
             },
             Node::Ncc(ncc) => {
-                let Node::NccPartner(partner) = &mut *ncc.partner.borrow_mut() else { panic!("wtf") };
+                let partner = ncc.partner.take().unwrap();
                 NodeRemove::Ncc {
+                    partner,
                     ncc_tokens: std::mem::take(&mut ncc.items),
-                    ncc_partner_tokens: std::mem::take(&mut partner.new_results),
                 }
             }
-            Node::NccPartner(_) => {
-                unimplemented!("Should not be reachable")
+            Node::NccPartner(partner) => {
+                NodeRemove::NccPartner {  
+                    ncc_partner_tokens: std::mem::take(&mut partner.new_results),
+                }
             }
         };
 
@@ -368,17 +373,15 @@ impl Rete {
                         .retain(|child| child.borrow().id() != node.borrow().id());
                 }
 
-                if !alpha_mem.borrow().successors.is_empty() {
-                    return;
-                }
+                if alpha_mem.borrow().successors.is_empty() {
+                    println!("Deleting Alpha Mem {}", alpha_mem.borrow());
+                    alpha_mem.borrow_mut().items.clear();
 
-                println!("Deleting Alpha Mem {}", alpha_mem.borrow());
-                alpha_mem.borrow_mut().items.clear();
-
-                for test in constant_tests {
-                    let Some(mem) = self.constant_tests.get(test) else { continue; };
-                    if mem.borrow().successors.is_empty() {
-                        self.constant_tests.remove(test);
+                    for test in constant_tests {
+                        let Some(mem) = self.constant_tests.get(test) else { continue; };
+                        if mem.borrow().successors.is_empty() {
+                            self.constant_tests.remove(test);
+                        }
                     }
                 }
             }
@@ -402,40 +405,47 @@ impl Rete {
                         .retain(|child| child.borrow().id() != node.borrow().id());
                 }
 
-                if !alpha_mem.borrow().successors.is_empty() {
-                    return;
-                }
-
-                println!("Deleting Alpha Mem {}", alpha_mem.borrow());
-                alpha_mem.borrow_mut().items.clear();
-
-                for test in constant_tests {
-                    let Some(mem) = self.constant_tests.get(test) else { continue; };
-                    if mem.borrow().successors.is_empty() {
-                        self.constant_tests.remove(test);
+                if alpha_mem.borrow().successors.is_empty() {   
+                    println!("Deleting Alpha Mem {}", alpha_mem.borrow());
+                    alpha_mem.borrow_mut().items.clear();
+                    
+                    for test in constant_tests {
+                        let Some(mem) = self.constant_tests.get(test) else { continue; };
+                        if mem.borrow().successors.is_empty() {
+                            self.constant_tests.remove(test);
+                        }
                     }
                 }
             }
             NodeRemove::Ncc {
+                partner,
                 mut ncc_tokens,
-                mut ncc_partner_tokens,
             } => {
+                self.delete_node_and_unused_ancestors(partner, constant_tests);
                 while let Some(token) = ncc_tokens.pop() {
                     Token::delete_self_and_descendants(token)
                 }
+            }
+            NodeRemove::NccPartner { mut ncc_partner_tokens } => {
                 while let Some(token) = ncc_partner_tokens.pop() {
                     Token::delete_self_and_descendants(token)
                 }
-            }
+            },
             NodeRemove::Production => {}
         }
 
         // Remove this node from its parent and remove the parent if it
-        // was the list child
+        // was the last child
         if let Some(parent) = node.borrow().parent() {
             {
-                parent.borrow_mut().remove_child(node.borrow().id());
+                let id = node.borrow().id();
+                parent.borrow_mut().remove_child(id);
             }
+            println!(
+                "Parent node {} remaining children {:?}",
+                parent.borrow().id(), 
+                parent.borrow().children().map(|c|c.iter().map(|n|n.borrow().id()).collect::<Vec<_>>())
+            );
             if parent.borrow().children().is_none() {
                 self.delete_node_and_unused_ancestors(parent, constant_tests);
             }
@@ -443,19 +453,22 @@ impl Rete {
     }
 }
 
-fn update_new_node_with_matches_from_above(node: &RcCell<Node>) {
+/// This procedures is triggered whenever a new production enters the system and its job is to find
+/// potential existing matches for the newly created production by traversing the parent node
+/// and propagating activations if matches are found.
+fn update_new_node_with_matches_from_above(node: &ReteNode) {
     println!("Updating node {}", node.borrow());
 
     let Some(parent) = node.borrow().parent() else { return; };
 
     println!("Updating parent {}", parent.borrow());
 
-    // This avoids keeping the mutable borrow when recursively activating
+    // This avoids keeping the mutable borrow when recursively right activating the join node
     let children = match *parent.borrow_mut() {
         Node::Beta(ref beta) => {
             beta.items
                 .iter()
-                .for_each(|token| activate_left(node, token, token.borrow().wme.as_ref()));
+                .for_each(|token| activate_left(node, token, None));
             return;
         }
         Node::Negative(ref mut negative) => {
@@ -486,10 +499,10 @@ fn update_new_node_with_matches_from_above(node: &RcCell<Node>) {
             .items
             .iter()
             .for_each(|item| activate_right(&parent, &item.borrow().wme)),
-        _ => unreachable!("Should not be reachable"),
+        _ => unreachable!("Rust no longer works"),
     }
 
-    let Node::Join(ref mut join) = *parent.borrow_mut() else { panic!("Should not be reachable") };
+    let Node::Join(ref mut join) = *parent.borrow_mut() else { panic!("Rust no longer works") };
     join.children = children;
 }
 
@@ -524,13 +537,13 @@ fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, wme: &RcCell<
 /// activation, because it means a condition is true which should be false.
 ///
 /// Left activating production nodes causes them to execute whatever is specified in their production.
-fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, wme: Option<&RcCell<Wme>>) {
+fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcCell<Wme>>) {
     match &mut *node.borrow_mut() {
         Node::Beta(ref mut beta_node) => {
             let new_token = Token::new(node, Some(parent_token), wme);
 
             println!(
-                "Left activating beta {} and appending token {}",
+                "*\nLeft activating beta {} and appending token {}\n*",
                 beta_node.id,
                 new_token.borrow().id
             );
@@ -540,12 +553,10 @@ fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, wme: Option<
             beta_node
                 .children
                 .iter()
-                // TODO check whether we should pass the wme, it should not make a difference since beta nodes can only
-                // contain join nodes as their children and the left activation of join nodes doesn't care about the wme
-                .for_each(|child| activate_left(child, &new_token, wme));
+                .for_each(|child| activate_left(child, &new_token, None));
         }
         Node::Join(ref mut join_node) => {
-            println!("Left activating join {}", join_node.id);
+            println!("*\nLeft activating join {}\n*", join_node.id);
 
             for item in join_node.alpha_memory.borrow().items.iter() {
                 if join_test(&join_node.tests, parent_token, &item.borrow().wme.borrow()) {
@@ -559,7 +570,7 @@ fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, wme: Option<
             let new_token = Token::new(node, Some(parent_token), wme);
 
             println!(
-                "Left activating negative {} and appending token {}",
+                "*\nLeft activating negative {} and appending token {}\n*",
                 negative_node.id,
                 new_token.borrow().id
             );
@@ -599,14 +610,17 @@ fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, wme: Option<
             let new_token = Token::new(node, Some(parent_token), wme);
 
             println!(
-                "Left activating ncc {} and appending token {}",
+                "*\nLeft activating ncc {} and appending token {}\n*",
                 ncc_node.id,
                 new_token.borrow().id
             );
 
             ncc_node.items.push(Rc::clone(&new_token));
 
-            if let Node::NccPartner(ncc_partner) = &mut *ncc_node.partner.borrow_mut() {
+            if let Node::NccPartner(ncc_partner) =
+                &mut *ncc_node.partner.as_ref().unwrap().borrow_mut()
+            {
+                println!("Checking NCC partner {} for new results", ncc_partner.id);
                 for result in std::mem::take(&mut ncc_partner.new_results) {
                     result.borrow_mut().owner = Some(Rc::clone(&new_token));
                     new_token.borrow_mut().ncc_results.push(result)
@@ -620,27 +634,34 @@ fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, wme: Option<
             }
         }
         Node::NccPartner(ncc_partner) => {
+            println!("*\nLeft activating ncc partner {} with parent token {}\n*", ncc_partner, parent_token.borrow());
             let ncc_node = &ncc_partner.ncc_node;
             let new_result = Token::new(node, Some(parent_token), wme);
 
             let mut owners_t = Some(Rc::clone(parent_token));
             let mut owners_w = wme.cloned();
 
+            
             for _ in 0..ncc_partner.number_of_conjucts {
                 owners_w = owners_t.as_ref().unwrap().borrow().wme.clone();
                 let parent = owners_t.as_ref().unwrap().borrow().parent.clone();
                 owners_t = parent;
             }
 
+            println!("Current owner token {:?}", owners_t.as_ref().map(|t|t.borrow().id));
+            println!("Current owner WME {:?}", owners_w.as_ref().map(|t|t.borrow().id));
+
             if let Node::Ncc(ncc) = &*ncc_node.borrow() {
                 if let Some(owner) = ncc.items.iter().find(|token| {
                     let token = token.borrow();
                     token.parent == owners_t && token.wme == owners_w
                 }) {
+                    println!("Found existing owner token for {}", owners_t.as_ref().unwrap().borrow());
                     let owner = &mut *owner.borrow_mut();
                     owner.ncc_results.push(new_result);
                     Token::delete_descendants(std::mem::take(&mut owner.children))
                 } else {
+                    println!("No owner token found for {}", new_result.borrow());
                     // There was no appropriate owner token already in the NCC's memory. This means
                     // the subnetwork was activated for a new match for the preceding conditions,
                     // and `new_result` emerged from the bottom, but the NCC node hasn't been
@@ -665,9 +686,9 @@ fn activate_left(node: &RcCell<Node>, parent_token: &RcCell<Token>, wme: Option<
 ///
 /// Right activations are caused by [AlphaMemoryNode]s when [WME][Wme]s are changed or
 /// when new [WME][Wme]s enter the network
-fn activate_right(node: &RcCell<Node>, wme: &RcCell<Wme>) {
+fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
     let node = &*node.borrow();
-    println!("Right activating {} {}", node._type(), node.id());
+    println!("*\nRight activating {} {}\n*", node._type(), node.id());
     match node {
         Node::Join(ref join_node) => {
             if let Node::Beta(ref parent) = *join_node.parent.borrow() {
@@ -709,7 +730,8 @@ fn activate_right(node: &RcCell<Node>, wme: &RcCell<Wme>) {
     }
 }
 
-fn build_or_share_beta_memory_node(parent: &RcCell<Node>) -> RcCell<Node> {
+fn build_or_share_beta_memory_node(parent: &ReteNode) -> ReteNode {
+    println!("Building/sharing beta node with parent {}", parent.borrow());
     if let Some(children) = parent.borrow().children() {
         // Look for an existing beta node to share
         for child in children {
@@ -722,20 +744,20 @@ fn build_or_share_beta_memory_node(parent: &RcCell<Node>) -> RcCell<Node> {
 
     let new = BetaMemoryNode::new(Some(Rc::clone(parent))).to_node_cell();
 
+    println!("Built {}", new.borrow());
+
     parent.borrow_mut().add_child(&new);
 
     update_new_node_with_matches_from_above(&new);
-
-    println!("Built {}", new.borrow());
 
     new
 }
 
 fn build_or_share_join_node(
-    parent: &RcCell<Node>,
+    parent: &ReteNode,
     alpha_memory: &RcCell<AlphaMemoryNode>,
     tests: Vec<TestAtJoinNode>,
-) -> RcCell<Node> {
+) -> ReteNode {
     if let Some(children) = parent.borrow().children() {
         // Look for an existing join node to share
         for child in children {
@@ -755,18 +777,18 @@ fn build_or_share_join_node(
     // Add the newly created node to the alpha memory successors
     alpha_memory.borrow_mut().successors.push(Rc::clone(&new));
 
-    parent.borrow_mut().add_child(&new);
-
     println!("Built {}", new.borrow());
+
+    parent.borrow_mut().add_child(&new);
 
     new
 }
 
 fn build_or_share_negative_node(
-    parent: &RcCell<Node>,
+    parent: &ReteNode,
     alpha_memory: &RcCell<AlphaMemoryNode>,
     tests: Vec<TestAtJoinNode>,
-) -> RcCell<Node> {
+) -> ReteNode {
     if let Some(children) = parent.borrow().children() {
         for child in children {
             if let Node::Negative(node) = &*child.borrow() {
@@ -779,6 +801,8 @@ fn build_or_share_negative_node(
     }
 
     let new = NegativeNode::new(parent, alpha_memory, tests).to_node_cell();
+    
+    println!("Built {}", new.borrow());
 
     alpha_memory.borrow_mut().successors.push(Rc::clone(&new));
 
@@ -786,7 +810,6 @@ fn build_or_share_negative_node(
 
     update_new_node_with_matches_from_above(&new);
 
-    println!("Built {}", new.borrow());
 
     new
 }
@@ -803,7 +826,7 @@ fn join_test(tests: &[TestAtJoinNode], token: &RcCell<Token>, wme: &Wme) -> bool
         let parent = Token::nth_parent(Rc::clone(token), test.distance_to_wme);
 
         // If the tokens are pointing to the dummy token they immediatelly get a pass
-        if parent.borrow().id == 0 {
+        if parent.borrow().id == DUMMY_TOKEN_ID {
             println!("Join test successful");
             return true;
         }
@@ -812,7 +835,7 @@ fn join_test(tests: &[TestAtJoinNode], token: &RcCell<Token>, wme: &Wme) -> bool
 
         // If there is no WME on the token, it represents a negative node on the token
         // which should return false since the args are not equal??
-        let Some(wme2) = &parent.wme else { return false; }; //TODO figure out if this is correct
+        let Some(wme2) = &parent.wme else { return false; }; // TODO figure out if this is correct
 
         let wme2 = wme2.borrow();
         println!("Comparing WME {:?} from token {}", wme2.fields, parent.id);
@@ -836,7 +859,7 @@ fn join_test(tests: &[TestAtJoinNode], token: &RcCell<Token>, wme: &Wme) -> bool
 
 fn get_join_tests_from_condition(
     condition: &Condition,
-    earlier_conds: &[Condition],
+    earlier_conds: &[&Condition],
 ) -> Vec<TestAtJoinNode> {
     let mut result = vec![];
 
@@ -846,19 +869,25 @@ fn get_join_tests_from_condition(
     );
 
     let current_condition_num = earlier_conds.len();
-
+    
     for (current_idx, var) in condition.variables() {
         let Some((distance, prev_idx)) = earlier_conds
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(idx, cond)| cond.variables().find_map(|(cond_idx, v)|
+            .find_map(|(idx, cond)| {
+                // We do not care about variable bindings in previous negative conditions
+                let Condition::Positive { .. } = cond else { 
+                    println!("Condition is negative, returning"); 
+                    return None; 
+                };
+                cond.variables().find_map(|(cond_idx, v)|
                 if v == var {
                     Some((idx + 1, cond_idx))
                 } else {
                     None
                 }
-            ))
+            )})
         else {
             continue;
         };
@@ -884,14 +913,11 @@ mod tests {
     #[test]
     fn it_works() {
         let mut rete = Rete::new();
-        let conditions = Vec::from([Condition::new(
-            ConditionType::Positive,
-            [
-                ConditionTest::Variable(1),
-                ConditionTest::Constant(2),
-                ConditionTest::Variable(3),
-            ],
-        )]);
+        let conditions = Vec::from([Condition::new_positive([
+            ConditionTest::Variable(1),
+            ConditionTest::Constant(2),
+            ConditionTest::Variable(3),
+        ])]);
         rete.add_production(Production { id: 1, conditions });
         rete.add_wme([1, 2, 3]);
     }
@@ -899,19 +925,10 @@ mod tests {
     #[test]
     fn join_test_to_condition() {
         use ConditionTest::*;
-        let condition = Condition::new(
-            ConditionType::Positive,
-            [Variable(2), Variable(3), Variable(4)],
-        );
+        let condition = Condition::new_positive([Variable(2), Variable(3), Variable(4)]);
         let previous = &[
-            Condition::new(
-                ConditionType::Positive,
-                [Variable(1), Variable(1), Variable(2)],
-            ),
-            Condition::new(
-                ConditionType::Positive,
-                [Variable(5), Variable(6), Variable(3)],
-            ),
+            &Condition::new_positive([Variable(1), Variable(1), Variable(2)]),
+            &Condition::new_positive([Variable(5), Variable(6), Variable(3)]),
         ];
         let test_nodes = get_join_tests_from_condition(&condition, previous);
 
@@ -933,24 +950,13 @@ mod tests {
             }
         );
 
-        let c = Condition::new(
-            ConditionType::Positive,
-            [Variable(1), Constant(0), Variable(2)],
+        let c = Condition::new_positive([Variable(1), Constant(0), Variable(2)]);
+        let (c1, c2, c3) = (
+            &Condition::new_positive([Variable(3), Constant(1), Variable(5)]),
+            &Condition::new_positive([Variable(1), Constant(0), Variable(7)]),
+            &Condition::new_positive([Variable(6), Constant(0), Variable(7)]),
         );
-        let earlier = vec![
-            Condition::new(
-                ConditionType::Positive,
-                [Variable(3), Constant(1), Variable(5)],
-            ),
-            Condition::new(
-                ConditionType::Positive,
-                [Variable(1), Constant(0), Variable(7)],
-            ),
-            Condition::new(
-                ConditionType::Positive,
-                [Variable(6), Constant(0), Variable(7)],
-            ),
-        ];
+        let earlier = vec![c1, c2, c3];
 
         let result = get_join_tests_from_condition(&c, &earlier);
 
@@ -963,24 +969,13 @@ mod tests {
             }
         );
 
-        let c = Condition::new(
-            ConditionType::Positive,
-            [Variable(1), Constant(0), Variable(2)],
+        let c = Condition::new_positive([Variable(1), Constant(0), Variable(2)]);
+        let (c1, c2, c3) = (
+            &Condition::new_positive([Variable(3), Constant(1), Variable(5)]),
+            &Condition::new_positive([Variable(2), Constant(0), Variable(7)]),
+            &Condition::new_positive([Variable(6), Constant(0), Variable(1)]),
         );
-        let earlier = vec![
-            Condition::new(
-                ConditionType::Positive,
-                [Variable(3), Constant(1), Variable(5)],
-            ),
-            Condition::new(
-                ConditionType::Positive,
-                [Variable(2), Constant(0), Variable(7)],
-            ),
-            Condition::new(
-                ConditionType::Positive,
-                [Variable(6), Constant(0), Variable(1)],
-            ),
-        ];
+        let earlier = vec![c1, c2, c3];
 
         let result = get_join_tests_from_condition(&c, &earlier);
 

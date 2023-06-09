@@ -1,34 +1,36 @@
 WMES
 
-WME { id: 0, fields: [0, 10, 1], tokens: ["1"] }
+WME { id: 0, fields: [0, 10, 1], tokens: ["2"] }, refs: 3
 
 TOKENS
 
-Token { id: 0, parent: None, wme: None, node: 0, children: ["1"] }, refs: 4
-Token { id: 1, parent: Some("0"), wme: Some([0, 10, 1]), node: 2, children: [] }, refs: 4
+Token { id: 0, parent: None, wme: None, node: 0, children: ["1"], neg_join_res: , ncc_res: , owner: None }, refs: 4
+Token { id: 1, parent: Some("0"), wme: None, node: 1, children: ["2"], neg_join_res: , ncc_res: , owner: None }, refs: 4
+  Token { id: 2, parent: Some("1"), wme: Some([0, 10, 1]), node: 3, children: [], neg_join_res: , ncc_res: , owner: None }, refs: 4
 
 BETA NETWORK
 
-Beta { id: 0, items: [0], parent: None, children: [1] }
-Join { id: 1, parent: 0, children: [2] }
-  Beta { id: 2, items: [1], parent: Some(1), children: [3] }
-    Join { id: 3, parent: 2, children: [4] }
-      Beta { id: 4, items: [], parent: Some(3), children: [5] }
-        Join { id: 5, parent: 4, children: [9000] }
-          Prod { id: 9000 }
+Beta { id: 0, items: [0], parent: None, children: [1] }, refs: 3
+Beta { id: 1, items: [1], parent: Some(0), children: [2] }, refs: 3
+  Join { id: 2, parent: 1, children: [3], tests: [] }, refs: 3
+    Beta { id: 3, items: [2], parent: Some(2), children: [4] }, refs: 3
+      Join { id: 4, parent: 3, children: [5], tests: [TestAtJoinNode { arg_one: 0, distance_to_wme: 0, arg_two: 2 }] }, refs: 3
+        Beta { id: 5, items: [], parent: Some(4), children: [6] }, refs: 2
+          Join { id: 6, parent: 5, children: [9000], tests: [TestAtJoinNode { arg_one: 0, distance_to_wme: 0, arg_two: 2 }] }, refs: 3
+            Prod { id: 9000, production: Production { id: 9000, conditions: P[V_0 - C_10 - V_1], P[V_1 - C_12 - V_2], P[V_2 - C_11 - C_20],  } }, refs: 2
 
 ALPHA NETWORK
 
 ConstantTest([None, Some(10), None]) :
-Alpha { id: 0, successors: ["1"], items: 27, }
-
+Alpha { id: 0, successors: ["2"], items: AlphaItem { id: 31, wme: [0, 10, 1], alpha_mem: 0,}, }
+, refs: 4
 ConstantTest([None, Some(12), None]) :
-Alpha { id: 1, successors: ["3"], items:  }
-
+Alpha { id: 1, successors: ["4"], items:  }
+, refs: 2
 ConstantTest([None, Some(11), Some(20)]) :
-Alpha { id: 2, successors: ["5"], items:  }
-
+Alpha { id: 2, successors: ["6"], items:  }
+, refs: 2
 
 PRODUCTIONS
 
-Prod { id: 9000 }
+Prod { id: 9000, production: Production { id: 9000, conditions: P[V_0 - C_10 - V_1], P[V_1 - C_12 - V_2], P[V_2 - C_11 - C_20],  } }, refs: 2

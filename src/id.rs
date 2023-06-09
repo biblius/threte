@@ -1,8 +1,8 @@
 use std::sync::atomic::AtomicUsize;
 
 static ALPHA_NODE_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
-static BETA_NODE_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
-static TOKEN_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
+static BETA_NODE_ID_GENERATOR: AtomicUsize = AtomicUsize::new(1); // 0 reserved for dummy
+static TOKEN_ID_GENERATOR: AtomicUsize = AtomicUsize::new(1); // 0 reserved for dummy
 static ITEM_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
 static WME_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
 static PROD_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
@@ -33,8 +33,8 @@ pub fn prod_id() -> usize {
 
 pub fn reset() {
     ALPHA_NODE_ID_GENERATOR.store(0, std::sync::atomic::Ordering::SeqCst);
-    BETA_NODE_ID_GENERATOR.store(0, std::sync::atomic::Ordering::SeqCst);
-    TOKEN_ID_GENERATOR.store(0, std::sync::atomic::Ordering::SeqCst);
+    BETA_NODE_ID_GENERATOR.store(1, std::sync::atomic::Ordering::SeqCst);
+    TOKEN_ID_GENERATOR.store(1, std::sync::atomic::Ordering::SeqCst);
     WME_ID_GENERATOR.store(0, std::sync::atomic::Ordering::SeqCst);
     PROD_ID_GENERATOR.store(0, std::sync::atomic::Ordering::SeqCst);
 }

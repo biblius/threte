@@ -1,8 +1,10 @@
+use test_log::test;
 use threte::{
     id::reset,
-    item::{Condition, ConditionTest, ConditionType, Production},
+    item::{Condition, ConditionTest, Production},
     Rete,
 };
+use tracing::info;
 
 const B1: usize = 1;
 const B2: usize = 2;
@@ -43,26 +45,11 @@ const C_RED: ConditionTest = ConditionTest::Constant(RED);
 const C_MAIZE: ConditionTest = ConditionTest::Constant(MAIZE);
 const C_BLUE: ConditionTest = ConditionTest::Constant(BLUE);
 
-const C1: Condition = Condition {
-    _type: ConditionType::Positive,
-    tests: [V_X, C_ON, V_Y],
-};
-const C2: Condition = Condition {
-    _type: ConditionType::Positive,
-    tests: [V_Y, C_LEFT_OF, V_Z],
-};
-const C3: Condition = Condition {
-    _type: ConditionType::Positive,
-    tests: [V_Z, C_COLOR, C_RED],
-};
-const C4: Condition = Condition {
-    _type: ConditionType::Positive,
-    tests: [V_A, C_COLOR, C_MAIZE],
-};
-const C5: Condition = Condition {
-    _type: ConditionType::Positive,
-    tests: [V_B, C_COLOR, C_BLUE],
-};
+const C1: Condition = Condition::new_positive([V_X, C_ON, V_Y]);
+const C2: Condition = Condition::new_positive([V_Y, C_LEFT_OF, V_Z]);
+const C3: Condition = Condition::new_positive([V_Z, C_COLOR, C_RED]);
+const C4: Condition = Condition::new_positive([V_A, C_COLOR, C_MAIZE]);
+const C5: Condition = Condition::new_positive([V_B, C_COLOR, C_BLUE]);
 
 fn productions() -> Vec<Production> {
     vec![
@@ -135,6 +122,9 @@ fn add_productions_and_wmes_then_remove() {
     let id6 = rete.add_wme([B5, COLOR, MAIZE]);
     let id7 = rete.add_wme([B6, COLOR, BLUE]);
 
+    rete.print_to_file("tests/add_productions_and_wmes_then_remove/0_initial.txt")
+        .unwrap();
+
     rete.remove_wme(id1);
     rete.remove_wme(id2);
     rete.remove_wme(id3);
@@ -143,8 +133,13 @@ fn add_productions_and_wmes_then_remove() {
     rete.remove_wme(id6);
     rete.remove_wme(id7);
 
+    rete.print_to_file("tests/add_productions_and_wmes_then_remove/1_wmes_removed.txt")
+        .unwrap();
+
+    info!("{}", rete.dummy_top_node.borrow().children().unwrap().len());
+    info!("{}", rete.dummy_top_token.borrow().children.len());
     assert!(rete.working_memory.is_empty());
-    assert!(rete.dummy_top_token.borrow().children.is_empty());
+    assert_eq!(rete.dummy_top_token.borrow().children.len(), 1);
 
     rete.remove_production(prod_id1);
     rete.remove_production(prod_id2);
@@ -227,7 +222,7 @@ fn wme_removal_with_tokens() {
     rete.remove_wme(id1);
 
     assert!(rete.working_memory.is_empty());
-    assert!(rete.dummy_top_token.borrow().children.is_empty());
+    assert_eq!(rete.dummy_top_token.borrow().children.len(), 1);
 
     rete.print_to_file("tests/wme_removal_with_tokens/remove_second_wme.txt")
         .unwrap();
@@ -307,10 +302,10 @@ fn production_removal_with_similar_productions() {
     const Y: usize = 1;
     const Z: usize = 2;
 
-    const C1: Condition = Condition::new(ConditionType::Positive, [V_X, C_ON, V_Y]);
-    const C2: Condition = Condition::new(ConditionType::Positive, [V_Y, C_LEFT_OF, V_Z]);
-    const C3: Condition = Condition::new(ConditionType::Positive, [V_Z, C_COLOR, C_RED]);
-    const C4: Condition = Condition::new(ConditionType::Positive, [V_Z, C_COLOR, C_BLUE]);
+    const C1: Condition = Condition::new_positive([V_X, C_ON, V_Y]);
+    const C2: Condition = Condition::new_positive([V_Y, C_LEFT_OF, V_Z]);
+    const C3: Condition = Condition::new_positive([V_Z, C_COLOR, C_RED]);
+    const C4: Condition = Condition::new_positive([V_Z, C_COLOR, C_BLUE]);
 
     const W1: [usize; 3] = [X, ON, Y];
     const W2: [usize; 3] = [Y, LEFT_OF, Z];
@@ -370,9 +365,9 @@ fn add_remove_negative_node() {
     const Y: usize = 1;
     const Z: usize = 2;
 
-    const C1: Condition = Condition::new(ConditionType::Positive, [V_X, C_ON, V_Y]);
-    const C2: Condition = Condition::new(ConditionType::Positive, [V_Y, C_LEFT_OF, V_Z]);
-    const C3: Condition = Condition::new(ConditionType::Negative, [V_Z, C_COLOR, C_RED]);
+    const C1: Condition = Condition::new_positive([V_X, C_ON, V_Y]);
+    const C2: Condition = Condition::new_positive([V_Y, C_LEFT_OF, V_Z]);
+    const C3: Condition = Condition::new_negative([V_Z, C_COLOR, C_RED]);
 
     const W1: [usize; 3] = [X, ON, Y];
     const W2: [usize; 3] = [Y, LEFT_OF, Z];
@@ -398,6 +393,105 @@ fn add_remove_negative_node() {
     rete.remove_production(prod_id1);
 
     rete.print_to_file("tests/add_remove_negative_node/remove_production.txt")
+        .unwrap();
+
+    assert!(rete.dummy_top_token.borrow().children.is_empty());
+    assert!(rete.productions.is_empty());
+
+    reset();
+}
+
+#[test]
+fn add_remove_ncc_node() {
+    const X: usize = 0;
+    const Y: usize = 1;
+    const Z: usize = 2;
+
+    const C1: Condition = Condition::new_positive([V_X, C_ON, V_Y]);
+    const C2: Condition = Condition::new_positive([V_Y, C_LEFT_OF, V_Z]);
+    let nccs = vec![
+        Condition::new_positive([V_Z, C_COLOR, C_RED]),
+        Condition::new_positive([V_Z, C_LEFT_OF, V_A]),
+    ];
+    let nc_3: Condition = Condition::new_ncc(nccs);
+
+    const W1: [usize; 3] = [X, ON, Y];
+    const W2: [usize; 3] = [Y, LEFT_OF, Z];
+    const W3: [usize; 3] = [Z, COLOR, BLUE];
+
+    let mut rete = Rete::default();
+
+    let production_1 = Production {
+        id: 9000,
+        conditions: vec![C1, C2, nc_3],
+    };
+
+    let prod_id1 = rete.add_production(production_1);
+    assert_eq!(rete.productions.len(), 1);
+
+    rete.print_to_file("tests/add_remove_ncc_node/0_initial.txt")
+        .unwrap();
+
+    rete.add_wme(W1);
+    rete.print_to_file("tests/add_remove_ncc_node/1_first_wme.txt")
+        .unwrap();
+
+    rete.add_wme(W2);
+    rete.print_to_file("tests/add_remove_ncc_node/2_second_wme.txt")
+        .unwrap();
+
+    rete.add_wme(W3);
+    rete.print_to_file("tests/add_remove_ncc_node/3_third_wme.txt")
+        .unwrap();
+
+    rete.remove_production(prod_id1);
+
+    rete.print_to_file("tests/add_remove_ncc_node/4_remove_production.txt")
+        .unwrap();
+
+    assert!(rete.dummy_top_token.borrow().children.is_empty());
+    assert!(rete.productions.is_empty());
+
+    reset();
+}
+
+#[test]
+fn add_remove_single_ncc() {
+    const X: usize = 0;
+    const Y: usize = 1;
+
+    let nccs = vec![
+        Condition::new_positive([V_X, C_COLOR, C_RED]),
+        Condition::new_positive([V_X, C_LEFT_OF, V_Y]),
+    ];
+    let nc: Condition = Condition::new_ncc(nccs);
+
+    const W1: [usize; 3] = [X, COLOR, RED];
+    const W2: [usize; 3] = [X, LEFT_OF, Y];
+
+    info!("hello");
+
+    let mut rete = Rete::default();
+
+    let production_1 = Production {
+        id: 9000,
+        conditions: vec![nc],
+    };
+
+    rete.add_wme(W1);
+    rete.add_wme(W2);
+    rete.print_to_file("tests/add_remove_single_ncc/0_add_wmes.txt")
+        .unwrap();
+
+    let prod_id1 = rete.add_production(production_1);
+    assert_eq!(rete.productions.len(), 1);
+
+    rete.print_to_file("tests/add_remove_single_ncc/1_add_production.txt")
+        .unwrap();
+
+    rete.remove_production(prod_id1);
+
+    rete.print_to_file("tests/add_remove_single_ncc/2_remove_production.txt")
         .unwrap();
 
     assert!(rete.dummy_top_token.borrow().children.is_empty());

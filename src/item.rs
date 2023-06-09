@@ -1,17 +1,20 @@
 use crate::{
+    activate_left,
     id::{item_id, token_id, wme_id},
-    node::{AlphaMemoryNode, Node},
+    node::{AlphaMemoryNode, Node, ReteNode},
     IntoCell, RcCell,
 };
 use std::ops::Index;
 use std::{hash::Hash, rc::Rc};
+
+pub const DUMMY_TOKEN_ID: usize = usize::MIN;
 
 /// A WME represents a piece of state in the system.
 ///
 /// WMEs are hashed based on their ID and index into
 /// corresponding alpha memories containing them, which eliminates the need
 /// to store a pointer to the memories on the actual WME.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct Wme {
     pub id: usize,
 
@@ -22,6 +25,12 @@ pub struct Wme {
     pub tokens: Vec<RcCell<Token>>,
 
     pub negative_join_results: Vec<RcCell<NegativeJoinResult>>,
+}
+
+impl PartialEq for Wme {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.fields == other.fields
+    }
 }
 
 impl Wme {
@@ -87,7 +96,7 @@ pub struct Token {
     pub wme: Option<RcCell<Wme>>,
 
     /// The node this token belongs to
-    pub node: RcCell<Node>,
+    pub node: ReteNode,
 
     /// List of pointers to this token's children
     pub children: Vec<RcCell<Self>>,
@@ -115,7 +124,7 @@ impl Token {
     /// Mutably borrows the parent_token and wme to append them to their
     /// respective lists
     pub fn new(
-        node: &RcCell<Node>,
+        node: &ReteNode,
         parent_token: Option<&RcCell<Self>>,
         wme: Option<&RcCell<Wme>>,
     ) -> RcCell<Self> {
@@ -150,6 +159,21 @@ impl Token {
         token
     }
 
+    /// Used when instantiating the network
+    pub fn dummy(dummy_top_node: &ReteNode) -> RcCell<Self> {
+        Self {
+            id: DUMMY_TOKEN_ID,
+            parent: None,
+            wme: None,
+            node: Rc::clone(dummy_top_node),
+            children: vec![],
+            negative_join_results: vec![],
+            ncc_results: vec![],
+            owner: None,
+        }
+        .to_cell()
+    }
+
     pub fn nth_parent(mut token: RcCell<Self>, n: usize) -> RcCell<Self> {
         for _ in 0..n {
             if let Some(ref parent) = Rc::clone(&token).borrow().parent {
@@ -180,23 +204,20 @@ impl Token {
         let node = Rc::clone(&tok.node);
         let children = std::mem::take(&mut tok.children);
         let negative_joins = std::mem::take(&mut tok.negative_join_results);
+        let ncc_results = std::mem::take(&mut tok.ncc_results);
+        let owner = tok.owner.take();
 
         drop(tok);
 
         println!("Deleting descendants of token {id}");
+
         Self::delete_descendants(children);
 
-        node.borrow_mut().remove_token(id);
+        println!("Deleting token from node {}", node.borrow());
 
-        if let Node::Negative(_) = &*node.borrow() {
-            for result in negative_joins {
-                result
-                    .borrow()
-                    .wme
-                    .borrow_mut()
-                    .negative_join_results
-                    .retain(|res| res.borrow().id != result.borrow().id)
-            }
+        // Remove from corresponding node, wme and parent token
+        if !matches!(&*node.borrow(), Node::NccPartner(_)) {
+            node.borrow_mut().remove_token(id);
         }
 
         if let Some(ref wme) = wme {
@@ -211,6 +232,43 @@ impl Token {
                 .children
                 .retain(|child| child.borrow().id != id)
         }
+
+        for result in negative_joins {
+            result
+                .borrow()
+                .wme
+                .borrow_mut()
+                .negative_join_results
+                .retain(|res| res.borrow().id != result.borrow().id)
+        }
+
+        for result in ncc_results {
+            let result = &mut result.borrow_mut();
+            if let Some(wme) = result.wme.take() {
+                wme.borrow_mut().tokens.retain(|t| t.borrow().id != id)
+            }
+            if let Some(parent) = result.parent.take() {
+                parent.borrow_mut().children.retain(|t| t.borrow().id != id)
+            }
+        }
+
+        if let Node::NccPartner(node) = &*node.borrow() {
+            if let Some(owner) = owner {
+                owner
+                    .borrow_mut()
+                    .ncc_results
+                    .retain(|res| res.borrow().id != id);
+                if owner.borrow().ncc_results.is_empty() {
+                    if let Some(children) = node.ncc_node.borrow().children() {
+                        for child in children {
+                            activate_left(child, &owner, None)
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = node;
     }
 
     #[inline]
@@ -269,7 +327,7 @@ pub struct TestAtJoinNode {
 /// index into the appropriate alpha memories for the condition.
 /// If a constant exists in the condition, it will be represented by `Some(constant)` in the test.
 /// A `None` in the constant test represents a wildcard.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ConstantTest([Option<usize>; 3]);
 
 impl ConstantTest {
@@ -280,13 +338,41 @@ impl ConstantTest {
     }
 }
 
+pub fn conditions_to_constant_tests(acc: &mut Vec<ConstantTest>, conditions: &[Condition]) {
+    for condition in conditions {
+        match condition {
+            Condition::Positive { .. } | Condition::Negative { .. } => {
+                acc.push(ConstantTest::from(condition))
+            }
+            Condition::NegativeConjunction { subconditions } => {
+                conditions_to_constant_tests(acc, subconditions);
+            }
+        }
+    }
+}
+
 impl From<Condition> for ConstantTest {
     fn from(condition: Condition) -> Self {
-        Self([
-            condition.tests[0].into(),
-            condition.tests[1].into(),
-            condition.tests[2].into(),
-        ])
+        match condition {
+            Condition::Positive { test } | Condition::Negative { test } => {
+                Self([test[0].into(), test[1].into(), test[2].into()])
+            }
+            Condition::NegativeConjunction { .. } => {
+                panic!("Cannot convert condition to constant test")
+            }
+        }
+    }
+}
+impl From<&Condition> for ConstantTest {
+    fn from(condition: &Condition) -> Self {
+        match condition {
+            Condition::Positive { test } | Condition::Negative { test } => {
+                Self([test[0].into(), test[1].into(), test[2].into()])
+            }
+            Condition::NegativeConjunction { .. } => {
+                panic!("Cannot convert condition to constant test")
+            }
+        }
     }
 }
 
@@ -315,38 +401,41 @@ pub enum ConditionTest {
     Variable(usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Condition {
-    pub _type: ConditionType,
-    pub tests: [ConditionTest; 3],
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Condition {
+    Positive { test: [ConditionTest; 3] },
+    Negative { test: [ConditionTest; 3] },
+    NegativeConjunction { subconditions: Vec<Self> },
 }
 
 impl Condition {
-    pub const fn new(_type: ConditionType, tests: [ConditionTest; 3]) -> Self {
-        Self { _type, tests }
+    pub const fn new_positive(test: [ConditionTest; 3]) -> Self {
+        Self::Positive { test }
     }
-    /// Returns an iterator over only the variable tests, along with
+
+    pub const fn new_negative(test: [ConditionTest; 3]) -> Self {
+        Self::Negative { test }
+    }
+
+    pub fn new_ncc(subconditions: Vec<Self>) -> Self {
+        Self::NegativeConjunction { subconditions }
+    }
+
+    /// Returns an iterator over only the variable test, along with
     /// their indices.
     pub fn variables(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        self.tests
-            .iter()
-            .enumerate()
-            .filter_map(|(i, test)| match test {
-                ConditionTest::Variable(id) => Some((i, *id)),
-                ConditionTest::Constant(_) => None,
-            })
+        match self {
+            Condition::Positive { test } | Condition::Negative { test } => {
+                test.iter().enumerate().filter_map(|(i, test)| match test {
+                    ConditionTest::Variable(id) => Some((i, *id)),
+                    ConditionTest::Constant(_) => None,
+                })
+            }
+            Condition::NegativeConjunction { .. } => {
+                panic!("NCC Condition does not have variables")
+            }
+        }
     }
-
-    pub fn _type(&self) -> ConditionType {
-        self._type
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConditionType {
-    Positive,
-    Negative,
-    NegativeConjunction,
 }
 
 /// A negative join results represents a successful join test performed by a negative node.
@@ -356,6 +445,7 @@ pub enum ConditionType {
 #[derive(Debug, PartialEq)]
 pub struct NegativeJoinResult {
     pub id: usize,
+
     /// The token in whose local memory this result resides in
     pub owner: RcCell<Token>,
 

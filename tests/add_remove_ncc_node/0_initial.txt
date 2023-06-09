@@ -1,0 +1,38 @@
+WMES
+
+
+TOKENS
+
+Token { id: 0, parent: None, wme: None, node: 0, children: ["1"], neg_join_res: , ncc_res: , owner: None }, refs: 4
+Token { id: 1, parent: Some("0"), wme: None, node: 1, children: [], neg_join_res: , ncc_res: , owner: None }, refs: 3
+
+BETA NETWORK
+
+Beta { id: 0, items: [0], parent: None, children: [1] }, refs: 3
+Beta { id: 1, items: [1], parent: Some(0), children: [2] }, refs: 3
+  Join { id: 2, parent: 1, children: [3], tests: [] }, refs: 3
+    Beta { id: 3, items: [], parent: Some(2), children: [4] }, refs: 2
+      Join { id: 4, parent: 3, children: [5, 9], tests: [TestAtJoinNode { arg_one: 0, distance_to_wme: 0, arg_two: 2 }] }, refs: 4
+        Beta { id: 5, items: [], parent: Some(4), children: [6] }, refs: 2
+          Join { id: 6, parent: 5, children: [7], tests: [TestAtJoinNode { arg_one: 0, distance_to_wme: 0, arg_two: 2 }] }, refs: 3
+            Beta { id: 7, items: [], parent: Some(6), children: [8] }, refs: 2
+              Join { id: 8, parent: 7, children: [10], tests: [TestAtJoinNode { arg_one: 0, distance_to_wme: 0, arg_two: 0 }] }, refs: 3
+                NCC Partner { id: 10, conjucts: 2 parent: 8, ncc: 9, new_results: [] }, refs: 2
+        NCC { id: 9, parent: 4, children: ["9000"], items: [], partner: Some("10") }, refs: 3
+                  Prod { id: 9000, production: Production { id: 9000, conditions: P[V_0 - C_10 - V_1], P[V_1 - C_12 - V_2], NCC{P[V_2 - C_11 - C_20], P[V_2 - C_12 - V_3], },  } }, refs: 2
+
+ALPHA NETWORK
+
+ConstantTest([None, Some(10), None]) :
+Alpha { id: 0, successors: ["2"], items:  }
+, refs: 2
+ConstantTest([None, Some(12), None]) :
+Alpha { id: 1, successors: ["4", "8"], items:  }
+, refs: 3
+ConstantTest([None, Some(11), Some(20)]) :
+Alpha { id: 2, successors: ["6"], items:  }
+, refs: 2
+
+PRODUCTIONS
+
+Prod { id: 9000, production: Production { id: 9000, conditions: P[V_0 - C_10 - V_1], P[V_1 - C_12 - V_2], NCC{P[V_2 - C_11 - C_20], P[V_2 - C_12 - V_3], },  } }, refs: 2

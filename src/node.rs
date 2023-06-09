@@ -1,9 +1,15 @@
+use tracing::info;
+
 use crate::{
     id::{alpha_node_id, beta_node_id},
     item::{AlphaMemoryItem, Production, TestAtJoinNode, Token},
     IntoCell, IntoNodeCell, RcCell,
 };
 use std::rc::Rc;
+
+pub type ReteNode = RcCell<Node>;
+
+pub const DUMMY_NODE_ID: usize = usize::MIN;
 
 #[derive(Debug)]
 pub enum Node {
@@ -41,7 +47,7 @@ impl Node {
     }
 
     #[inline]
-    pub fn children(&self) -> Option<&[RcCell<Node>]> {
+    pub fn children(&self) -> Option<&[ReteNode]> {
         match self {
             Node::Beta(node) if !node.children.is_empty() => Some(&node.children),
             Node::Join(node) if !node.children.is_empty() => Some(&node.children),
@@ -52,29 +58,48 @@ impl Node {
     }
 
     #[inline]
-    pub fn parent(&self) -> Option<RcCell<Node>> {
+    pub fn tokens(&self) -> Option<&[RcCell<Token>]> {
+        match self {
+            Node::Beta(node) if !node.items.is_empty() => Some(&node.items),
+            Node::Negative(node) if !node.items.is_empty() => Some(&node.items),
+            Node::Ncc(node) if !node.items.is_empty() => Some(&node.items),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn parent(&self) -> Option<ReteNode> {
         match self {
             Node::Beta(node) => node.parent.clone(),
             Node::Join(node) => Some(Rc::clone(&node.parent)),
             Node::Negative(node) => Some(Rc::clone(&node.parent)),
             Node::Ncc(node) => Some(Rc::clone(&node.parent)),
             Node::Production(node) => Some(Rc::clone(&node.parent)),
-            Node::NccPartner(_) => None,
+            Node::NccPartner(node) => Some(Rc::clone(&node.parent)),
         }
     }
 
     #[inline]
-    pub fn add_child(&mut self, node: &RcCell<Node>) {
+    pub fn add_child(&mut self, node: &ReteNode) {
         match self {
             Node::Beta(ref mut beta) => {
-                println!(
-                    "Adding child {} to Beta Node {}",
+                info!(
+                    "add_child - Adding child {} - {} to Beta Node {}",
+                    node.borrow()._type(),
                     node.borrow().id(),
                     beta.id
                 );
                 beta.children.push(Rc::clone(node))
             }
-            Node::Join(ref mut join) => join.children.push(Rc::clone(node)),
+            Node::Join(ref mut join) => {
+                info!(
+                    "add_child - Adding child {} - {} to Join Node {}",
+                    node.borrow()._type(),
+                    node.borrow().id(),
+                    join.id
+                );
+                join.children.push(Rc::clone(node))
+            }
             Node::Negative(ref mut negative) => negative.children.push(Rc::clone(node)),
             Node::Ncc(ref mut ncc) => ncc.children.push(Rc::clone(node)),
             Node::Production(_) => unreachable!("Production Node cannot have children"),
@@ -85,10 +110,25 @@ impl Node {
     #[inline]
     pub fn remove_child(&mut self, id: usize) {
         match self {
-            Node::Beta(beta) => beta.children.retain(|child| child.borrow().id() != id),
-            Node::Join(join) => join.children.retain(|child| child.borrow().id() != id),
-            Node::Negative(negative) => negative.children.retain(|child| child.borrow().id() != id),
-            Node::Ncc(ncc) => ncc.children.retain(|child| child.borrow().id() != id),
+            Node::Beta(beta) => {
+                info!("remove_child - Removing {} from Beta Node {}", id, beta.id);
+                beta.children.retain(|child| child.borrow().id() != id)
+            }
+            Node::Join(join) => {
+                info!("remove_child - Removing {} from Join Node {}", id, join.id);
+                join.children.retain(|child| child.borrow().id() != id)
+            }
+            Node::Negative(negative) => {
+                info!(
+                    "remove_child - Removing {} from Negative Node {}",
+                    id, negative.id
+                );
+                negative.children.retain(|child| child.borrow().id() != id)
+            }
+            Node::Ncc(ncc) => {
+                info!("remove_child - Removing {} from NCC Node {}", id, ncc.id);
+                ncc.children.retain(|child| child.borrow().id() != id)
+            }
             Node::Production(_) => unreachable!("Production Node cannot have children"),
             Node::NccPartner(_) => unreachable!("NCC Partner Node cannot have children"),
         }
@@ -106,7 +146,7 @@ impl Node {
 
     #[inline]
     pub fn remove_token(&mut self, id: usize) {
-        println!("Node {} removing token {}", self.id(), id);
+        info!("Node {} removing token {}", self.id(), id);
         match self {
             Node::Beta(beta) => beta.items.retain(|tok| tok.borrow().id != id),
             Node::Negative(negative) => negative.items.retain(|tok| tok.borrow().id != id),
@@ -122,7 +162,7 @@ impl Node {
 pub struct AlphaMemoryNode {
     pub id: usize,
     pub items: Vec<RcCell<AlphaMemoryItem>>,
-    pub successors: Vec<RcCell<Node>>,
+    pub successors: Vec<ReteNode>,
 }
 
 impl AlphaMemoryNode {
@@ -132,7 +172,7 @@ impl AlphaMemoryNode {
             items: vec![],
             successors: vec![],
         };
-        println!("Created Alpha Memory: {am}");
+        info!("Created Alpha Memory: {am}");
         am
     }
 }
@@ -148,13 +188,13 @@ impl IntoCell for AlphaMemoryNode {}
 #[derive(Debug)]
 pub struct BetaMemoryNode {
     pub id: usize,
-    pub parent: Option<RcCell<Node>>,
-    pub children: Vec<RcCell<Node>>,
+    pub parent: Option<ReteNode>,
+    pub children: Vec<ReteNode>,
     pub items: Vec<RcCell<Token>>,
 }
 
 impl BetaMemoryNode {
-    pub fn new(parent: Option<RcCell<Node>>) -> Self {
+    pub fn new(parent: Option<ReteNode>) -> Self {
         Self {
             id: beta_node_id(),
             parent,
@@ -162,20 +202,31 @@ impl BetaMemoryNode {
             items: vec![],
         }
     }
+
+    pub fn dummy() -> ReteNode {
+        info!("Initiating dummy Beta Node");
+        Self {
+            id: DUMMY_NODE_ID,
+            parent: None,
+            children: vec![],
+            items: vec![],
+        }
+        .to_node_cell()
+    }
 }
 
 #[derive(Debug)]
 pub struct JoinNode {
     pub id: usize,
-    pub parent: RcCell<Node>,
+    pub parent: ReteNode,
     pub alpha_memory: RcCell<AlphaMemoryNode>,
-    pub children: Vec<RcCell<Node>>,
+    pub children: Vec<ReteNode>,
     pub tests: Vec<TestAtJoinNode>,
 }
 
 impl JoinNode {
     pub fn new(
-        parent: &RcCell<Node>,
+        parent: &ReteNode,
         alpha_memory: &RcCell<AlphaMemoryNode>,
         tests: Vec<TestAtJoinNode>,
     ) -> Self {
@@ -192,19 +243,19 @@ impl JoinNode {
 #[derive(Debug)]
 pub struct ProductionNode {
     pub id: usize,
-    pub parent: RcCell<Node>,
+    pub parent: ReteNode,
     pub production: Production,
 }
 
 impl ProductionNode {
-    pub fn new(prod: Production, parent: &RcCell<Node>) -> Self {
+    pub fn new(prod: Production, parent: &ReteNode) -> Self {
         let node = Self {
             id: prod.id,
             parent: Rc::clone(parent),
             production: prod,
         };
 
-        println!("Created production node {node}");
+        info!("Created production node {node}");
 
         node
     }
@@ -220,13 +271,13 @@ pub struct NegativeNode {
     pub items: Vec<RcCell<Token>>,
     pub alpha_mem: RcCell<AlphaMemoryNode>,
     pub tests: Vec<TestAtJoinNode>,
-    pub parent: RcCell<Node>,
-    pub children: Vec<RcCell<Node>>,
+    pub parent: ReteNode,
+    pub children: Vec<ReteNode>,
 }
 
 impl NegativeNode {
     pub fn new(
-        parent: &RcCell<Node>,
+        parent: &ReteNode,
         alpha_mem: &RcCell<AlphaMemoryNode>,
         tests: Vec<TestAtJoinNode>,
     ) -> Self {
@@ -244,18 +295,48 @@ impl NegativeNode {
 #[derive(Debug)]
 pub struct NccNode {
     pub id: usize,
-    pub parent: RcCell<Node>,
-    pub children: Vec<RcCell<Node>>,
+    pub parent: ReteNode,
+    pub children: Vec<ReteNode>,
     pub items: Vec<RcCell<Token>>,
-    pub partner: RcCell<Node>,
+
+    /// This field is an option solely because we cannot construct an ncc node and its
+    /// partner simultaneously so we need some kind of way to instantiate one without the other.
+    ///
+    /// This will never be None while the node is alive in the network.
+    pub partner: Option<ReteNode>,
+}
+
+impl NccNode {
+    pub fn new(parent: &ReteNode) -> Self {
+        Self {
+            id: beta_node_id(),
+            parent: Rc::clone(parent),
+            children: vec![],
+            items: vec![],
+            partner: None,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct NccPartnerNode {
     pub id: usize,
+    pub parent: ReteNode,
     pub number_of_conjucts: usize,
-    pub ncc_node: RcCell<Node>,
+    pub ncc_node: ReteNode,
     pub new_results: Vec<RcCell<Token>>,
+}
+
+impl NccPartnerNode {
+    pub fn new(ncc_node: &ReteNode, parent: &ReteNode, number_of_conjucts: usize) -> Self {
+        Self {
+            id: beta_node_id(),
+            parent: Rc::clone(parent),
+            number_of_conjucts,
+            ncc_node: Rc::clone(ncc_node),
+            new_results: vec![],
+        }
+    }
 }
 
 impl PartialEq for NegativeNode {
@@ -268,23 +349,37 @@ impl PartialEq for NegativeNode {
 }
 
 impl IntoNodeCell for BetaMemoryNode {
-    fn to_node_cell(self) -> RcCell<Node> {
+    fn to_node_cell(self) -> ReteNode {
         std::rc::Rc::new(std::cell::RefCell::new(Node::Beta(self)))
     }
 }
+
 impl IntoNodeCell for JoinNode {
-    fn to_node_cell(self) -> RcCell<Node> {
+    fn to_node_cell(self) -> ReteNode {
         std::rc::Rc::new(std::cell::RefCell::new(Node::Join(self)))
     }
 }
+
 impl IntoNodeCell for ProductionNode {
-    fn to_node_cell(self) -> RcCell<Node> {
+    fn to_node_cell(self) -> ReteNode {
         std::rc::Rc::new(std::cell::RefCell::new(Node::Production(self)))
     }
 }
 
 impl IntoNodeCell for NegativeNode {
-    fn to_node_cell(self) -> RcCell<Node> {
+    fn to_node_cell(self) -> ReteNode {
         std::rc::Rc::new(std::cell::RefCell::new(Node::Negative(self)))
+    }
+}
+
+impl IntoNodeCell for NccNode {
+    fn to_node_cell(self) -> ReteNode {
+        std::rc::Rc::new(std::cell::RefCell::new(Node::Ncc(self)))
+    }
+}
+
+impl IntoNodeCell for NccPartnerNode {
+    fn to_node_cell(self) -> ReteNode {
+        std::rc::Rc::new(std::cell::RefCell::new(Node::NccPartner(self)))
     }
 }

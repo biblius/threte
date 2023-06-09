@@ -3,11 +3,11 @@ WMES
 
 TOKENS
 
-Token { id: 0, parent: None, wme: None, node: 0, children: [] }, refs: 2
+Token { id: 0, parent: None, wme: None, node: 0, children: [], neg_join_res: , ncc_res: , owner: None }, refs: 2
 
 BETA NETWORK
 
-Beta { id: 0, items: [], parent: None, children: [] }
+Beta { id: 0, items: [], parent: None, children: [] }, refs: 2
 
 ALPHA NETWORK
 
