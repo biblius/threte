@@ -1,5 +1,8 @@
 use crate::{
-    item::{AlphaMemoryItem, Condition, ConstantTest, NegativeJoinResult, Production, Token, Wme},
+    item::{
+        AlphaMemoryItem, Condition, ConstantTest, NegativeJoinResult, Production, Token, TokenBase,
+        Wme,
+    },
     node::{
         AlphaMemoryNode, BetaMemoryNode, JoinNode, NccNode, NccPartnerNode, NegativeNode, Node,
         ProductionNode, ReteNode,
@@ -107,10 +110,10 @@ impl Display for Condition {
             Condition::Positive { test } => {
                 write!(buf, "P[")?;
                 for (i, t) in test.iter().enumerate() {
-                    let delim = if i == 2 { "" } else { " - " };
+                    let delim = if i == 2 { "" } else { "-" };
                     match t {
-                        crate::item::ConditionTest::Constant(id) => write!(buf, "C_{id}{delim}")?,
-                        crate::item::ConditionTest::Variable(id) => write!(buf, "V_{id}{delim}")?,
+                        crate::item::ConditionTest::Constant(id) => write!(buf, "C({id}){delim}")?,
+                        crate::item::ConditionTest::Variable(id) => write!(buf, "V({id}){delim}")?,
                     }
                 }
                 write!(buf, "], ")?;
@@ -118,10 +121,10 @@ impl Display for Condition {
             Condition::Negative { test } => {
                 write!(buf, "N[")?;
                 for (i, t) in test.iter().enumerate() {
-                    let delim = if i == 2 { "" } else { " - " };
+                    let delim = if i == 2 { "" } else { "-" };
                     match t {
-                        crate::item::ConditionTest::Constant(id) => write!(buf, "C_{id}{delim}")?,
-                        crate::item::ConditionTest::Variable(id) => write!(buf, "V_{id}{delim}")?,
+                        crate::item::ConditionTest::Constant(id) => write!(buf, "C({id}){delim}")?,
+                        crate::item::ConditionTest::Variable(id) => write!(buf, "V({id}){delim}")?,
                     }
                 }
                 write!(buf, "], ")?;
@@ -152,7 +155,7 @@ impl Display for BetaMemoryNode {
             self.id,
             self.items
                 .iter()
-                .map(|item| item.borrow().id)
+                .map(|item| item.borrow().id())
                 .collect::<Vec<_>>(),
             self.parent.as_ref().map(|p| p.borrow().id()),
             self.children
@@ -181,50 +184,144 @@ impl Display for JoinNode {
 
 impl Display for Token {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        write!(
-            f,
-            "Token {{ id: {}, parent: {:?}, wme: {:?}, node: {}, children: {:?}, neg_join_res: {}, ncc_res: {}, owner: {} }}",
-            self.id,
-            self.parent.as_ref().map(|t| t
-                .try_borrow()
-                .map_or("borrowed".to_string(), |t| t.id.to_string())),
-            self.wme
-                .as_ref()
-                .map(|wme| wme.try_borrow().map_or([0, 0, 0], |wme| wme.fields)),
-            self.node
-                .try_borrow()
-                .map_or("borrowed".to_string(), |n| n.id().to_string()),
-            self.children
-                .iter()
-                .map(|tok| tok
-                    .try_borrow()
-                    .map_or("borrowed".to_string(), |t| t.id.to_string()))
-                .collect::<Vec<_>>(),
-            self.negative_join_results.iter().fold(String::new(), |mut acc, el| {
+        write!(f, "Token::")?;
+        match self {
+            Token::Dummy { id, node, children } => {
                 write!(
-                    acc,
-                    "{},",
-                    el.try_borrow()
-                        .map_or_else(|_| "borrowed".to_string(), |el| el.id.to_string())
+                    f,
+                    "Dummy {{ id: {}, node: {}, children: {:?} }}",
+                    id,
+                    node.try_borrow()
+                        .map_or("borrowed".to_string(), |n| n.id().to_string()),
+                    children
+                        .iter()
+                        .map(|tok| tok
+                            .try_borrow()
+                            .map_or("borrowed".to_string(), |t| t.id().to_string()))
+                        .collect::<Vec<_>>(),
                 )
-                .unwrap();
-                acc
-            }),
-            self.ncc_results.iter().fold(String::new(), |mut acc, el| {
+            }
+            Token::Beta {
+                base:
+                    TokenBase {
+                        id,
+                        node,
+                        parent,
+                        children,
+                        wme,
+                    },
+            } => {
                 write!(
-                    acc,
-                    "{},",
-                    el.try_borrow()
-                        .map_or_else(|_| "borrowed".to_string(), |el| el.id.to_string())
+                    f,
+                    "Beta {{ id: {}, parent: {:?}, wme: {:?}, node: {}, children: {:?} }}",
+                    id,
+                    parent
+                        .as_ref()
+                        .try_borrow()
+                        .map_or("borrowed".to_string(), |t| t.id().to_string()),
+                    wme.as_ref()
+                        .map(|wme| wme.try_borrow().map_or([0, 0, 0], |wme| wme.fields)),
+                    node.try_borrow()
+                        .map_or("borrowed".to_string(), |n| n.id().to_string()),
+                    children
+                        .iter()
+                        .map(|tok| tok
+                            .try_borrow()
+                            .map_or("borrowed".to_string(), |t| t.id().to_string()))
+                        .collect::<Vec<_>>(),
                 )
-                .unwrap();
-                acc
-            }),
-            self.owner.as_ref().map_or("None".to_string(), |o|{
-                o.try_borrow()
-                .map_or("borrowed".to_string(), |n| n.id.to_string())}
-            )
-        )
+            }
+            Token::Negative {
+                base:
+                    TokenBase {
+                        id,
+                        node,
+                        parent,
+                        children,
+                        wme,
+                    },
+                join_results,
+            } => {
+                let njr = join_results.iter().fold(String::new(), |mut acc, el| {
+                    write!(
+                        acc,
+                        "{},",
+                        el.try_borrow()
+                            .map_or_else(|_| "borrowed".to_string(), |el| el.id.to_string())
+                    )
+                    .unwrap();
+                    acc
+                });
+                write!(
+                    f,
+                    "Negative {{ id: {}, parent: {:?}, wme: {:?}, node: {}, children: {:?}, neg_join_res: {:?} }}",
+                    id,
+                    parent.as_ref()
+                        .try_borrow()
+                        .map_or("borrowed".to_string(), |t| t.id().to_string()),
+                    wme.as_ref()
+                        .map(|wme| wme.try_borrow().map_or([0, 0, 0], |wme| wme.fields)),
+                    node.try_borrow()
+                        .map_or("borrowed".to_string(), |n| n.id().to_string()),
+                    children
+                        .iter()
+                        .map(|tok| tok
+                            .try_borrow()
+                            .map_or("borrowed".to_string(), |t| t.id().to_string()))
+                        .collect::<Vec<_>>(),
+                    njr
+                )
+            }
+            Token::NCC {
+                base:
+                    TokenBase {
+                        id,
+                        node,
+                        parent,
+                        children,
+                        wme,
+                    },
+                ncc_results,
+                owner,
+            } => {
+                let nccr = ncc_results.iter().fold(String::new(), |mut acc, el| {
+                    write!(
+                        acc,
+                        "{},",
+                        el.try_borrow()
+                            .map_or_else(|_| "borrowed".to_string(), |el| el.id().to_string())
+                    )
+                    .unwrap();
+                    acc
+                });
+
+                write!(
+                    f,
+                    "NCC {{ id: {}, parent: {:?}, wme: {:?}, node: {}, children: {:?}, ncc_res: {}, owner: {} }}",
+                    id,
+                    parent.as_ref()
+                        .try_borrow()
+                        .map_or("borrowed".to_string(), |t| t.id().to_string()),
+                    wme
+                        .as_ref()
+                        .map(|wme| wme.try_borrow().map_or([0, 0, 0], |wme| wme.fields)),
+                    node
+                        .try_borrow()
+                        .map_or("borrowed".to_string(), |n| n.id().to_string()),
+                    children
+                        .iter()
+                        .map(|tok| tok
+                            .try_borrow()
+                            .map_or("borrowed".to_string(), |t| t.id().to_string()))
+                        .collect::<Vec<_>>(),
+                    nccr,
+                    owner.as_ref().map_or("None".to_string(), |o|{
+                        o.try_borrow()
+                        .map_or("borrowed".to_string(), |n| n.id().to_string())}
+                    )
+                )
+            }
+        }
     }
 }
 
@@ -236,7 +333,7 @@ impl Display for NegativeJoinResult {
             self.id,
             self.owner
                 .try_borrow()
-                .map_or("borrowed".to_string(), |o| o.id.to_string()),
+                .map_or("borrowed".to_string(), |o| o.id().to_string()),
             self.wme
                 .try_borrow()
                 .map_or("borrowed".to_string(), |wme| format!("{}", wme))
@@ -262,7 +359,7 @@ impl Display for NccNode {
                 .iter()
                 .map(|t| t
                     .try_borrow()
-                    .map_or("borrowed".to_string(), |t| t.id.to_string()))
+                    .map_or("borrowed".to_string(), |t| t.id().to_string()))
                 .collect::<Vec<_>>(),
             self.partner.as_ref().map(|p| {
                 p.try_borrow()
@@ -289,7 +386,7 @@ impl Display for NccPartnerNode {
                 .iter()
                 .map(|t| t
                     .try_borrow()
-                    .map_or("borrowed".to_string(), |t| t.id.to_string()))
+                    .map_or("borrowed".to_string(), |t| t.to_string()))
                 .collect::<Vec<_>>(),
         )
     }
@@ -306,7 +403,7 @@ impl Display for Wme {
                 .iter()
                 .map(|t| t
                     .try_borrow()
-                    .map_or("borrowed".to_string(), |t| t.id.to_string()))
+                    .map_or("borrowed".to_string(), |t| t.id().to_string()))
                 .collect::<Vec<_>>()
         )
     }
@@ -314,20 +411,22 @@ impl Display for Wme {
 
 impl Rete {
     pub fn print_to_file(&self, path: &str) -> std::result::Result<(), std::io::Error> {
-        let mut buf = match std::fs::read_to_string("printed") {
-            Ok(buf) => buf,
+        let path = format!("tests/out/{path}");
+        let mut buf = match std::fs::read_to_string(&path) {
+            Ok(_) => String::new(),
             Err(_) => {
                 if path.contains('/') {
-                    std::fs::create_dir_all(path.split_at(path.rfind('/').unwrap()).0).unwrap();
+                    let path = path.split_at(path.rfind('/').unwrap()).0;
+                    std::fs::create_dir_all(path).unwrap();
                 }
-                std::fs::write(path, "").unwrap();
-                std::fs::read_to_string(path).unwrap()
+                std::fs::write(&path, "").unwrap();
+                std::fs::read_to_string(&path).unwrap()
             }
         };
         writeln!(buf, "WMES\n").unwrap();
         write_wmes(&mut buf, &self.working_memory);
         writeln!(buf, "\nTOKENS\n").unwrap();
-        write_tokens(&mut buf, self.dummy_top_token.clone());
+        write_tokens(&mut buf, &self.dummy_top_token);
         writeln!(buf, "\nBETA NETWORK\n").unwrap();
         write_beta_network(&mut buf, &self.dummy_top_node);
         writeln!(buf, "\nALPHA NETWORK\n").unwrap();
@@ -385,18 +484,18 @@ fn write_beta_network(buf: &mut String, node: &ReteNode) {
     }
 }
 
-fn write_tokens(buf: &mut String, token: RcCell<Token>) {
-    let count = Rc::strong_count(&token);
+fn write_tokens(buf: &mut String, token: &RcCell<Token>) {
+    let count = Rc::strong_count(token);
     let tok = token.borrow();
     writeln!(
         buf,
         "{}{}, refs: {}",
-        " ".repeat(tok.parent.as_ref().map_or(0, |p| p.borrow().id * 2)),
+        " ".repeat(tok.parent().as_ref().map_or(0, |p| p.borrow().id() * 2)),
         tok,
         count
     )
     .unwrap();
-    for child in tok.children.iter() {
-        write_tokens(buf, child.clone());
+    for child in tok.children().iter() {
+        write_tokens(buf, child);
     }
 }

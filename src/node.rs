@@ -1,5 +1,3 @@
-use tracing::info;
-
 use crate::{
     id::{alpha_node_id, beta_node_id},
     item::{AlphaMemoryItem, Production, TestAtJoinNode, Token},
@@ -83,7 +81,7 @@ impl Node {
     pub fn add_child(&mut self, node: &ReteNode) {
         match self {
             Node::Beta(ref mut beta) => {
-                info!(
+                println!(
                     "add_child - Adding child {} - {} to Beta Node {}",
                     node.borrow()._type(),
                     node.borrow().id(),
@@ -92,7 +90,7 @@ impl Node {
                 beta.children.push(Rc::clone(node))
             }
             Node::Join(ref mut join) => {
-                info!(
+                println!(
                     "add_child - Adding child {} - {} to Join Node {}",
                     node.borrow()._type(),
                     node.borrow().id(),
@@ -100,8 +98,24 @@ impl Node {
                 );
                 join.children.push(Rc::clone(node))
             }
-            Node::Negative(ref mut negative) => negative.children.push(Rc::clone(node)),
-            Node::Ncc(ref mut ncc) => ncc.children.push(Rc::clone(node)),
+            Node::Negative(ref mut negative) => {
+                println!(
+                    "add_child - Adding child {} - {} to Join Node {}",
+                    node.borrow()._type(),
+                    node.borrow().id(),
+                    negative.id
+                );
+                negative.children.push(Rc::clone(node))
+            }
+            Node::Ncc(ref mut ncc) => {
+                println!(
+                    "add_child - Adding child {} - {} to Join Node {}",
+                    node.borrow()._type(),
+                    node.borrow().id(),
+                    ncc.id
+                );
+                ncc.children.push(Rc::clone(node))
+            }
             Node::Production(_) => unreachable!("Production Node cannot have children"),
             Node::NccPartner(_) => unreachable!("NCC Partner Node cannot have children"),
         }
@@ -111,22 +125,22 @@ impl Node {
     pub fn remove_child(&mut self, id: usize) {
         match self {
             Node::Beta(beta) => {
-                info!("remove_child - Removing {} from Beta Node {}", id, beta.id);
+                println!("remove_child - Removing {} from Beta Node {}", id, beta.id);
                 beta.children.retain(|child| child.borrow().id() != id)
             }
             Node::Join(join) => {
-                info!("remove_child - Removing {} from Join Node {}", id, join.id);
+                println!("remove_child - Removing {} from Join Node {}", id, join.id);
                 join.children.retain(|child| child.borrow().id() != id)
             }
             Node::Negative(negative) => {
-                info!(
+                println!(
                     "remove_child - Removing {} from Negative Node {}",
                     id, negative.id
                 );
                 negative.children.retain(|child| child.borrow().id() != id)
             }
             Node::Ncc(ncc) => {
-                info!("remove_child - Removing {} from NCC Node {}", id, ncc.id);
+                println!("remove_child - Removing {} from NCC Node {}", id, ncc.id);
                 ncc.children.retain(|child| child.borrow().id() != id)
             }
             Node::Production(_) => unreachable!("Production Node cannot have children"),
@@ -146,11 +160,11 @@ impl Node {
 
     #[inline]
     pub fn remove_token(&mut self, id: usize) {
-        info!("Node {} removing token {}", self.id(), id);
+        println!("Node {} removing token {}", self.id(), id);
         match self {
-            Node::Beta(beta) => beta.items.retain(|tok| tok.borrow().id != id),
-            Node::Negative(negative) => negative.items.retain(|tok| tok.borrow().id != id),
-            Node::Ncc(ncc) => ncc.items.retain(|tok| tok.borrow().id != id),
+            Node::Beta(beta) => beta.items.retain(|tok| tok.borrow().id() != id),
+            Node::Negative(negative) => negative.items.retain(|tok| tok.borrow().id() != id),
+            Node::Ncc(ncc) => ncc.items.retain(|tok| tok.borrow().id() != id),
             _ => unreachable!("Node cannot contain tokens"),
         }
     }
@@ -172,7 +186,7 @@ impl AlphaMemoryNode {
             items: vec![],
             successors: vec![],
         };
-        info!("Created Alpha Memory: {am}");
+        println!("Created Alpha Memory: {am}");
         am
     }
 }
@@ -204,7 +218,7 @@ impl BetaMemoryNode {
     }
 
     pub fn dummy() -> ReteNode {
-        info!("Initiating dummy Beta Node");
+        println!("Initiating dummy Beta Node");
         Self {
             id: DUMMY_NODE_ID,
             parent: None,
@@ -255,7 +269,7 @@ impl ProductionNode {
             production: prod,
         };
 
-        info!("Created production node {node}");
+        println!("Created production node {node}");
 
         node
     }

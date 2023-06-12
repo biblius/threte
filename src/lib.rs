@@ -4,7 +4,7 @@ pub mod item;
 pub mod node;
 
 use crate::{
-    item::{AlphaMemoryItem, conditions_to_constant_tests, DUMMY_TOKEN_ID},
+    item::{conditions_to_constant_tests, AlphaMemoryItem, DUMMY_TOKEN_ID},
     node::{BetaMemoryNode, JoinNode, NccNode, NccPartnerNode, ProductionNode},
 };
 use item::{Condition, ConstantTest, NegativeJoinResult, Production, TestAtJoinNode, Token, Wme};
@@ -60,7 +60,7 @@ impl Rete {
     fn new() -> Self {
         let dummy_top_node = BetaMemoryNode::dummy();
 
-        let dummy_top_token = Token::dummy(&dummy_top_node);
+        let dummy_top_token = Token::new_dummy(&dummy_top_node);
 
         dummy_top_node.borrow_mut().add_token(&dummy_top_token);
 
@@ -146,14 +146,10 @@ impl Rete {
         for result in n_join_results {
             let result = result.borrow();
 
-            result
-                .owner
-                .borrow_mut()
-                .negative_join_results
-                .retain(|res| res.borrow().id != result.id);
+            let is_empty = result.owner.borrow_mut().remove_ncc_result(result.id);
 
-            if result.owner.borrow().negative_join_results.is_empty() {
-                if let Some(children) = result.owner.borrow().node.borrow().children() {
+            if is_empty {
+                if let Some(children) = result.owner.borrow().node().borrow().children() {
                     for child in children {
                         activate_left(child, &result.owner, None);
                     }
@@ -163,7 +159,10 @@ impl Rete {
     }
 
     pub fn add_production(&mut self, production: Production) -> usize {
-        println!("Adding production {}", production.id);
+        println!(
+            "------------\nAdding production {}\n------------",
+            production.id
+        );
 
         let id = production.id;
         let conditions = &production.conditions;
@@ -185,11 +184,13 @@ impl Rete {
         id
     }
 
-
     pub fn remove_production(&mut self, id: usize) -> bool {
         let Some(production) = self.productions.remove(&id) else { return false; };
 
-        println!("Removing production {}", production.borrow());
+        println!(
+            "------------\nRemoving production {}\n------------",
+            production.borrow()
+        );
 
         let mut tests = vec![];
         {
@@ -255,8 +256,13 @@ impl Rete {
             self.build_or_share_network_for_conditions(parent, subconditions, earlier_conds);
 
         let ncc_node = NccNode::new(parent).to_node_cell();
+
+        println!("Built {}", ncc_node.borrow());
+
         let partner =
             NccPartnerNode::new(&ncc_node, &subnet_bottom, subconditions.len()).to_node_cell();
+
+        println!("Built {}", partner.borrow());
 
         if let Node::Ncc(ncc) = &mut *ncc_node.borrow_mut() {
             ncc.partner = Some(Rc::clone(&partner))
@@ -293,10 +299,13 @@ impl Rete {
 
         self.constant_tests.insert(constant_test, Rc::clone(&am));
 
-        println!("Indexing constant test {constant_test:?} to AM {}", am.borrow());
+        println!(
+            "Indexing constant test {constant_test:?} to AM {}",
+            am.borrow()
+        );
 
         println!("Searching for matching WMEs for {constant_test:?}");
-        
+
         for (_, wme) in self.working_memory.iter() {
             let _wme = wme.borrow();
             if constant_test.matches(&_wme) {
@@ -357,11 +366,9 @@ impl Rete {
                     ncc_tokens: std::mem::take(&mut ncc.items),
                 }
             }
-            Node::NccPartner(partner) => {
-                NodeRemove::NccPartner {  
-                    ncc_partner_tokens: std::mem::take(&mut partner.new_results),
-                }
-            }
+            Node::NccPartner(partner) => NodeRemove::NccPartner {
+                ncc_partner_tokens: std::mem::take(&mut partner.new_results),
+            },
         };
 
         match remove_result {
@@ -405,10 +412,10 @@ impl Rete {
                         .retain(|child| child.borrow().id() != node.borrow().id());
                 }
 
-                if alpha_mem.borrow().successors.is_empty() {   
+                if alpha_mem.borrow().successors.is_empty() {
                     println!("Deleting Alpha Mem {}", alpha_mem.borrow());
                     alpha_mem.borrow_mut().items.clear();
-                    
+
                     for test in constant_tests {
                         let Some(mem) = self.constant_tests.get(test) else { continue; };
                         if mem.borrow().successors.is_empty() {
@@ -426,11 +433,13 @@ impl Rete {
                     Token::delete_self_and_descendants(token)
                 }
             }
-            NodeRemove::NccPartner { mut ncc_partner_tokens } => {
+            NodeRemove::NccPartner {
+                mut ncc_partner_tokens,
+            } => {
                 while let Some(token) = ncc_partner_tokens.pop() {
                     Token::delete_self_and_descendants(token)
                 }
-            },
+            }
             NodeRemove::Production => {}
         }
 
@@ -443,8 +452,11 @@ impl Rete {
             }
             println!(
                 "Parent node {} remaining children {:?}",
-                parent.borrow().id(), 
-                parent.borrow().children().map(|c|c.iter().map(|n|n.borrow().id()).collect::<Vec<_>>())
+                parent.borrow().id(),
+                parent
+                    .borrow()
+                    .children()
+                    .map(|c| c.iter().map(|n| n.borrow().id()).collect::<Vec<_>>())
             );
             if parent.borrow().children().is_none() {
                 self.delete_node_and_unused_ancestors(parent, constant_tests);
@@ -473,7 +485,7 @@ fn update_new_node_with_matches_from_above(node: &ReteNode) {
         }
         Node::Negative(ref mut negative) => {
             negative.items.iter().for_each(|token| {
-                if token.borrow().negative_join_results.is_empty() {
+                if !token.borrow().contains_join_results() {
                     activate_left(node, token, None)
                 }
             });
@@ -481,7 +493,7 @@ fn update_new_node_with_matches_from_above(node: &ReteNode) {
         }
         Node::Ncc(ref mut ncc) => {
             ncc.items.iter().for_each(|token| {
-                if token.borrow().ncc_results.is_empty() {
+                if !token.borrow().contains_ncc_results() {
                     activate_left(node, token, None)
                 }
             });
@@ -513,14 +525,18 @@ fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, wme: &RcCell<
     let item = AlphaMemoryItem::new(wme, alpha_mem_node).to_cell();
 
     // Insert new item at the head of the node's items
-    let mut alpha_mem = alpha_mem_node.borrow_mut();
-    alpha_mem.items.push(Rc::clone(&item));
+    {
+        let mut alpha_mem = alpha_mem_node.borrow_mut();
+        alpha_mem.items.push(Rc::clone(&item));
+    }
+    let alpha_mem = alpha_mem_node.borrow();
 
-    println!("Activating Alpha Node: {alpha_mem}");
+    println!("-> Activating Alpha Node: {alpha_mem}");
 
     alpha_mem
         .successors
         .iter()
+        .rev()
         .for_each(|node| activate_right(node, wme))
 }
 
@@ -540,13 +556,9 @@ fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, wme: &RcCell<
 fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcCell<Wme>>) {
     match &mut *node.borrow_mut() {
         Node::Beta(ref mut beta_node) => {
-            let new_token = Token::new(node, Some(parent_token), wme);
+            println!("<- Left activating beta {}", beta_node.id,);
 
-            println!(
-                "*\nLeft activating beta {} and appending token {}\n*",
-                beta_node.id,
-                new_token.borrow().id
-            );
+            let new_token = Token::new_beta(node, parent_token, wme);
 
             beta_node.items.push(Rc::clone(&new_token));
 
@@ -556,7 +568,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
                 .for_each(|child| activate_left(child, &new_token, None));
         }
         Node::Join(ref mut join_node) => {
-            println!("*\nLeft activating join {}\n*", join_node.id);
+            println!("<- Left activating join {}", join_node.id);
 
             for item in join_node.alpha_memory.borrow().items.iter() {
                 if join_test(&join_node.tests, parent_token, &item.borrow().wme.borrow()) {
@@ -567,12 +579,12 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
             }
         }
         Node::Negative(negative_node) => {
-            let new_token = Token::new(node, Some(parent_token), wme);
+            let new_token = Token::new_negative(node, parent_token, wme);
 
             println!(
-                "*\nLeft activating negative {} and appending token {}\n*",
+                "<- Left activating negative {} and appending token {}",
                 negative_node.id,
-                new_token.borrow().id
+                new_token.borrow().id()
             );
 
             negative_node.items.push(Rc::clone(&new_token));
@@ -586,10 +598,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
                     let join_result =
                         NegativeJoinResult::new(&new_token, &item.borrow().wme).to_cell();
 
-                    new_token
-                        .borrow_mut()
-                        .negative_join_results
-                        .push(Rc::clone(&join_result));
+                    new_token.borrow_mut().add_join_result(&join_result);
 
                     if let Some(wme) = wme {
                         wme.borrow_mut()
@@ -600,66 +609,80 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
             }
 
             // Negative nodes propagate left activations only if no tokens passed its join tests
-            if new_token.borrow().negative_join_results.is_empty() {
+            if !new_token.borrow().contains_join_results() {
                 for child in negative_node.children.iter() {
                     activate_left(child, &new_token, None)
                 }
             }
         }
         Node::Ncc(ncc_node) => {
-            let new_token = Token::new(node, Some(parent_token), wme);
-
-            println!(
-                "*\nLeft activating ncc {} and appending token {}\n*",
-                ncc_node.id,
-                new_token.borrow().id
-            );
+            println!("<- Left activating ncc {}", ncc_node.id,);
+            let new_token = Token::new_ncc(node, parent_token, wme);
 
             ncc_node.items.push(Rc::clone(&new_token));
 
             if let Node::NccPartner(ncc_partner) =
                 &mut *ncc_node.partner.as_ref().unwrap().borrow_mut()
             {
-                println!("Checking NCC partner {} for new results", ncc_partner.id);
+                println!(
+                    "Checking NCC partner {} for new results (len {})",
+                    ncc_partner.id,
+                    ncc_partner.new_results.len()
+                );
                 for result in std::mem::take(&mut ncc_partner.new_results) {
-                    result.borrow_mut().owner = Some(Rc::clone(&new_token));
-                    new_token.borrow_mut().ncc_results.push(result)
+                    result.borrow_mut().set_owner(&new_token);
+                    new_token.borrow_mut().add_ncc_result(&result)
                 }
             }
 
-            if new_token.borrow().ncc_results.is_empty() {
+            if !new_token.borrow().contains_ncc_results() {
                 for child in ncc_node.children.iter() {
                     activate_left(child, &new_token, None)
                 }
             }
         }
         Node::NccPartner(ncc_partner) => {
-            println!("*\nLeft activating ncc partner {} with parent token {}\n*", ncc_partner, parent_token.borrow());
+            println!(
+                "<- Left activating ncc partner {} with parent token {}",
+                ncc_partner,
+                parent_token.borrow()
+            );
             let ncc_node = &ncc_partner.ncc_node;
-            let new_result = Token::new(node, Some(parent_token), wme);
+            let new_result = Token::new_ncc(node, parent_token, wme);
 
-            let mut owners_t = Some(Rc::clone(parent_token));
-            let mut owners_w = wme.cloned();
+            let mut owners_token = Some(Rc::clone(parent_token));
+            let mut owners_wme = wme.cloned();
 
-            
             for _ in 0..ncc_partner.number_of_conjucts {
-                owners_w = owners_t.as_ref().unwrap().borrow().wme.clone();
-                let parent = owners_t.as_ref().unwrap().borrow().parent.clone();
-                owners_t = parent;
+                owners_wme = owners_token.as_ref().unwrap().borrow().wme().cloned();
+                let parent = owners_token.as_ref().unwrap().borrow().parent().cloned();
+                owners_token = parent;
             }
 
-            println!("Current owner token {:?}", owners_t.as_ref().map(|t|t.borrow().id));
-            println!("Current owner WME {:?}", owners_w.as_ref().map(|t|t.borrow().id));
+            println!(
+                "Current owner token {:?}",
+                owners_token.as_ref().map(|t| t.borrow().id())
+            );
+            println!(
+                "Current owner WME {:?}",
+                owners_wme.as_ref().map(|t| t.borrow().id)
+            );
 
             if let Node::Ncc(ncc) = &*ncc_node.borrow() {
                 if let Some(owner) = ncc.items.iter().find(|token| {
                     let token = token.borrow();
-                    token.parent == owners_t && token.wme == owners_w
+                    println!("SEARCHING TOKEN {token}");
+                    token.parent() == owners_token.as_ref() && token.wme() == owners_wme.as_ref()
                 }) {
-                    println!("Found existing owner token for {}", owners_t.as_ref().unwrap().borrow());
-                    let owner = &mut *owner.borrow_mut();
-                    owner.ncc_results.push(new_result);
-                    Token::delete_descendants(std::mem::take(&mut owner.children))
+                    println!(
+                        "Found existing owner token {}",
+                        owners_token.as_ref().unwrap().borrow()
+                    );
+                    let mut owner = owner.borrow_mut();
+                    owner.add_ncc_result(&new_result);
+                    let children = std::mem::take(owner.children_mut());
+                    drop(owner);
+                    Token::delete_descendants(children)
                 } else {
                     println!("No owner token found for {}", new_result.borrow());
                     // There was no appropriate owner token already in the NCC's memory. This means
@@ -688,7 +711,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
 /// when new [WME][Wme]s enter the network
 fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
     let node = &*node.borrow();
-    println!("*\nRight activating {} {}\n*", node._type(), node.id());
+    println!("-> Right activating {} {}", node._type(), node.id());
     match node {
         Node::Join(ref join_node) => {
             if let Node::Beta(ref parent) = *join_node.parent.borrow() {
@@ -708,15 +731,12 @@ fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
                     // This check is done to see if the token's state has changed. If it previously
                     // had negative join results and is now empty, it means we must delete all its children
                     // since the partial matches are no longer valid.
-                    if token.borrow().negative_join_results.is_empty() {
-                        let children = std::mem::take(&mut token.borrow_mut().children);
+                    if !token.borrow().contains_join_results() {
+                        let children = std::mem::take(token.borrow_mut().children_mut());
                         Token::delete_descendants(children);
                     }
                     let join_result = NegativeJoinResult::new(token, wme).to_cell();
-                    token
-                        .borrow_mut()
-                        .negative_join_results
-                        .push(Rc::clone(&join_result));
+                    token.borrow_mut().add_join_result(&join_result);
                     wme.borrow_mut()
                         .negative_join_results
                         .push(Rc::clone(&join_result))
@@ -801,15 +821,15 @@ fn build_or_share_negative_node(
     }
 
     let new = NegativeNode::new(parent, alpha_memory, tests).to_node_cell();
-    
-    println!("Built {}", new.borrow());
 
-    alpha_memory.borrow_mut().successors.push(Rc::clone(&new));
+    println!("Built {}", new.borrow());
+    {
+        alpha_memory.borrow_mut().successors.push(Rc::clone(&new));
+    }
 
     parent.borrow_mut().add_child(&new);
 
     update_new_node_with_matches_from_above(&new);
-
 
     new
 }
@@ -819,14 +839,14 @@ fn join_test(tests: &[TestAtJoinNode], token: &RcCell<Token>, wme: &Wme) -> bool
         "Performing join tests on {tests:?} with WME {} {:?} and token {}",
         wme.id,
         wme.fields,
-        token.borrow().id
+        token.borrow().id()
     );
 
     for test in tests.iter() {
         let parent = Token::nth_parent(Rc::clone(token), test.distance_to_wme);
 
         // If the tokens are pointing to the dummy token they immediatelly get a pass
-        if parent.borrow().id == DUMMY_TOKEN_ID {
+        if parent.borrow().id() == DUMMY_TOKEN_ID {
             println!("Join test successful");
             return true;
         }
@@ -835,10 +855,10 @@ fn join_test(tests: &[TestAtJoinNode], token: &RcCell<Token>, wme: &Wme) -> bool
 
         // If there is no WME on the token, it represents a negative node on the token
         // which should return false since the args are not equal??
-        let Some(wme2) = &parent.wme else { return false; }; // TODO figure out if this is correct
+        let Some(wme2) = &parent.wme() else { return false; }; // TODO figure out if this is correct
 
         let wme2 = wme2.borrow();
-        println!("Comparing WME {:?} from token {}", wme2.fields, parent.id);
+        println!("Comparing WME {:?} from token {}", wme2.fields, parent.id());
 
         let current_value = wme[test.arg_one];
         let previous_value = wme2[test.arg_two];
@@ -869,7 +889,7 @@ fn get_join_tests_from_condition(
     );
 
     let current_condition_num = earlier_conds.len();
-    
+
     for (current_idx, var) in condition.variables() {
         let Some((distance, prev_idx)) = earlier_conds
             .iter()
@@ -877,9 +897,9 @@ fn get_join_tests_from_condition(
             .rev()
             .find_map(|(idx, cond)| {
                 // We do not care about variable bindings in previous negative conditions
-                let Condition::Positive { .. } = cond else { 
+                let Condition::Positive { .. } = cond else {
                     println!("Condition is negative, returning"); 
-                    return None; 
+                    return None;
                 };
                 cond.variables().find_map(|(cond_idx, v)|
                 if v == var {
@@ -1005,24 +1025,35 @@ mod tests {
 
         let node = beta.to_node_cell();
 
-        let daddy = Token::new(&node, None, Some(&wme));
+        let daddy = Token::new_dummy(&node);
 
-        let child_token_one = Token::new(&node, Some(&daddy), Some(&wme));
+        let child_token_one = Token::new_beta(&node, &daddy, Some(&wme));
 
-        let child_token_two = Token::new(&node, Some(&child_token_one), Some(&wme));
+        let child_token_two = Token::new_beta(&node, &child_token_one, Some(&wme));
+
+        let child_token_three = Token::new_beta(&node, &child_token_two, Some(&wme));
+
+        child_token_two
+            .borrow_mut()
+            .children_mut()
+            .push(Rc::clone(&child_token_three));
 
         child_token_one
             .borrow_mut()
-            .children
+            .children_mut()
             .push(Rc::clone(&child_token_two));
-        daddy.borrow_mut().children.push(child_token_one);
 
-        let parent = Token::nth_parent(child_token_two, 2);
+        daddy
+            .borrow_mut()
+            .children_mut()
+            .push(child_token_one.clone());
 
-        assert_eq!(parent.borrow().id, daddy.borrow().id);
+        let parent = Token::nth_parent(child_token_three, 2);
+
+        assert_eq!(parent.borrow().id(), child_token_one.borrow().id());
         assert_eq!(
-            parent.borrow().children.len(),
-            daddy.borrow().children.len()
+            parent.borrow().children().len(),
+            child_token_one.borrow().children().len()
         );
     }
 }
