@@ -143,7 +143,21 @@ impl Display for Condition {
 
 impl Display for NegativeNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        write!(f, "Negative {{ id: {} }}", self.id,)
+        write!(
+            f,
+            "Negative {{ id: {}, parent {:?}, children: {:?}, items: {:?} , tests: {:?} }}",
+            self.id,
+            self.parent.try_borrow().map(|p| p.id()),
+            self.children
+                .iter()
+                .map(|node| node.borrow().id())
+                .collect::<Vec<_>>(),
+            self.items
+                .iter()
+                .map(|item| item.borrow().id())
+                .collect::<Vec<_>>(),
+            self.tests.iter().collect::<Vec<_>>()
+        )
     }
 }
 
@@ -151,17 +165,17 @@ impl Display for BetaMemoryNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,
-            "Beta {{ id: {}, items: {:?}, parent: {:?}, children: {:?} }}",
+            "Beta {{ id: {}, parent: {:?}, children: {:?}, items: {:?} }}",
             self.id,
-            self.items
-                .iter()
-                .map(|item| item.borrow().id())
-                .collect::<Vec<_>>(),
             self.parent.as_ref().map(|p| p.borrow().id()),
             self.children
                 .iter()
                 .map(|node| node.borrow().id())
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
+            self.items
+                .iter()
+                .map(|item| item.borrow().id())
+                .collect::<Vec<_>>(),
         )
     }
 }
@@ -247,7 +261,7 @@ impl Display for Token {
                         acc,
                         "{},",
                         el.try_borrow()
-                            .map_or_else(|_| "borrowed".to_string(), |el| el.id.to_string())
+                            .map_or_else(|_| "borrowed".to_string(), |el| el.to_string())
                     )
                     .unwrap();
                     acc
@@ -373,15 +387,15 @@ impl Display for NccPartnerNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,
-            "NCC Partner {{ id: {}, conjucts: {} parent: {}, ncc: {}, new_results: {:?} }}",
+            "NCC Partner {{ id: {}, parent: {} ncc: {}, conjucts: {}, new_results: {:?} }}",
             self.id,
-            self.number_of_conjucts,
             self.parent
                 .try_borrow()
                 .map_or("borrowed".to_string(), |p| p.id().to_string()),
             self.ncc_node
                 .try_borrow()
                 .map_or("borrowed".to_string(), |n| n.id().to_string()),
+            self.number_of_conjucts,
             self.new_results
                 .iter()
                 .map(|t| t

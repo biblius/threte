@@ -1,6 +1,6 @@
 use crate::{
     id::{alpha_node_id, beta_node_id},
-    item::{AlphaMemoryItem, Production, TestAtJoinNode, Token},
+    item::{AlphaMemoryItem, JoinTest, Production, Token},
     IntoCell, IntoNodeCell, RcCell,
 };
 use std::rc::Rc;
@@ -235,14 +235,14 @@ pub struct JoinNode {
     pub parent: ReteNode,
     pub alpha_memory: RcCell<AlphaMemoryNode>,
     pub children: Vec<ReteNode>,
-    pub tests: Vec<TestAtJoinNode>,
+    pub tests: Vec<JoinTest>,
 }
 
 impl JoinNode {
     pub fn new(
         parent: &ReteNode,
         alpha_memory: &RcCell<AlphaMemoryNode>,
-        tests: Vec<TestAtJoinNode>,
+        tests: Vec<JoinTest>,
     ) -> Self {
         Self {
             id: beta_node_id(),
@@ -282,18 +282,18 @@ impl ProductionNode {
 #[derive(Debug)]
 pub struct NegativeNode {
     pub id: usize,
-    pub items: Vec<RcCell<Token>>,
-    pub alpha_mem: RcCell<AlphaMemoryNode>,
-    pub tests: Vec<TestAtJoinNode>,
     pub parent: ReteNode,
     pub children: Vec<ReteNode>,
+    pub items: Vec<RcCell<Token>>,
+    pub alpha_mem: RcCell<AlphaMemoryNode>,
+    pub tests: Vec<JoinTest>,
 }
 
 impl NegativeNode {
     pub fn new(
         parent: &ReteNode,
         alpha_mem: &RcCell<AlphaMemoryNode>,
-        tests: Vec<TestAtJoinNode>,
+        tests: Vec<JoinTest>,
     ) -> Self {
         Self {
             id: beta_node_id(),

@@ -44,6 +44,7 @@ impl Wme {
             negative_join_results: vec![],
         }
     }
+
     #[rustfmt::skip]
     pub fn permutations(&self) -> impl Iterator<Item = ConstantTest> {
         [
@@ -408,6 +409,8 @@ impl Token {
     }
 
     #[inline]
+    /// Returns the `n`th ancestor of a token by following the parent pointer from the provided
+    /// one
     pub fn nth_parent(mut token: RcCell<Self>, n: usize) -> RcCell<Self> {
         for _ in 0..n {
             if let Some(parent) = Rc::clone(&token).borrow().parent() {
@@ -422,7 +425,7 @@ impl Token {
     }
 
     /// Clean up the token and any of its descendants from the WME linked to it, its parent,
-    /// and the node it is stored in.
+    /// and the node it is stored in. Also remove
     pub fn delete_self_and_descendants(token: RcCell<Self>) {
         println!(
             "Deleting token {}, refs: {}",
@@ -497,6 +500,7 @@ impl Token {
         let _ = node;
     }
 
+    /// Run `delete_self_and_descendants` on the provided children vec
     #[inline]
     pub fn delete_descendants(mut children: Vec<ReteToken>) {
         while let Some(child) = children.pop() {
@@ -504,6 +508,8 @@ impl Token {
         }
     }
 
+    /// Destructure the token to avoid the mutable reference when deleting
+    #[inline]
     fn destructure(&mut self) -> DestructuredToken {
         match self {
             Token::Beta {
@@ -609,9 +615,9 @@ impl IntoCell for AlphaMemoryItem {}
 ///
 /// These are stored by beta nodes and are used to perform join tests.
 #[derive(Debug, Eq, PartialEq)]
-pub struct TestAtJoinNode {
+pub struct JoinTest {
     /// An index that ultimately indexes into a WME from the Alpha memory connected
-    /// to the overlying [JoinNode] of this test node. Compared with `arg_two` to
+    /// to the node holding this test. Compared with `arg_two` to
     /// tests whether a join should succeed.
     pub arg_one: usize,
 
@@ -740,8 +746,8 @@ impl Condition {
 }
 
 /// A negative join results represents a successful join test performed by a negative node.
-/// Whenever negative nodes are activated they will perform join tests, just like join nodes,
-/// and will store the result in their corresponding tokens and will propagate the activation further
+/// Whenever negative nodes are activated they will perform join tests,
+/// store the result in their corresponding tokens and will propagate the activation further
 /// only if the join tests do NOT pass for the WME in question.
 #[derive(Debug, PartialEq)]
 pub struct NegativeJoinResult {
@@ -750,7 +756,7 @@ pub struct NegativeJoinResult {
     /// The token in whose local memory this result resides in
     pub owner: ReteToken,
 
-    /// The WME that matches the owner
+    /// The WME held by the owner
     pub wme: RcCell<Wme>,
 }
 

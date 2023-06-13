@@ -506,7 +506,14 @@ fn ncc_complex() {
     const D: usize = 3;
 
     // Every red block has a blue block on top of it can be rewritten as a check that there is no
-    // red block that does not have a blue block on top of it
+    // red block that does not have a blue block on top of it.
+
+    // The first positive condition is necessary in order to provide the NCC with proper
+    // variable bindings. Otherwise the NCC will always do it's thing with the dummy token
+    // which is no bueno.
+
+    // The following conditions can be read: There does not exist a red block (c1)
+    // that has no blue block on top of it (ncc)
     let c = Condition::new_positive([V_X, C_COLOR, C_RED]);
     let ncc = Condition::new_ncc(vec![
         Condition::new_positive([V_X, C_COLOR, C_RED]),

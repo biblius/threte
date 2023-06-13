@@ -7,7 +7,7 @@ use crate::{
     item::{conditions_to_constant_tests, AlphaMemoryItem, DUMMY_TOKEN_ID},
     node::{BetaMemoryNode, JoinNode, NccNode, NccPartnerNode, ProductionNode},
 };
-use item::{Condition, ConstantTest, NegativeJoinResult, Production, TestAtJoinNode, Token, Wme};
+use item::{Condition, ConstantTest, JoinTest, NegativeJoinResult, Production, Token, Wme};
 use node::{AlphaMemoryNode, NegativeNode, Node, ReteNode};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -776,7 +776,7 @@ fn build_or_share_beta_memory_node(parent: &ReteNode) -> ReteNode {
 fn build_or_share_join_node(
     parent: &ReteNode,
     alpha_memory: &RcCell<AlphaMemoryNode>,
-    tests: Vec<TestAtJoinNode>,
+    tests: Vec<JoinTest>,
 ) -> ReteNode {
     if let Some(children) = parent.borrow().children() {
         // Look for an existing join node to share
@@ -807,7 +807,7 @@ fn build_or_share_join_node(
 fn build_or_share_negative_node(
     parent: &ReteNode,
     alpha_memory: &RcCell<AlphaMemoryNode>,
-    tests: Vec<TestAtJoinNode>,
+    tests: Vec<JoinTest>,
 ) -> ReteNode {
     if let Some(children) = parent.borrow().children() {
         for child in children {
@@ -834,7 +834,10 @@ fn build_or_share_negative_node(
     new
 }
 
-fn join_test(tests: &[TestAtJoinNode], token: &RcCell<Token>, wme: &Wme) -> bool {
+/// Perform variable binding consistency tests for each test in `tests` with the given `token` and `wme`.
+///
+/// [Join tests][JoinTest] are stored by join and negative nodes and are executed whenever those node are activated.
+fn join_test(tests: &[JoinTest], token: &RcCell<Token>, wme: &Wme) -> bool {
     println!(
         "Performing join tests on {tests:?} with WME {} {:?} and token {}",
         wme.id,
@@ -880,7 +883,7 @@ fn join_test(tests: &[TestAtJoinNode], token: &RcCell<Token>, wme: &Wme) -> bool
 fn get_join_tests_from_condition(
     condition: &Condition,
     earlier_conds: &[&Condition],
-) -> Vec<TestAtJoinNode> {
+) -> Vec<JoinTest> {
     let mut result = vec![];
 
     println!(
@@ -912,7 +915,7 @@ fn get_join_tests_from_condition(
             continue;
         };
 
-        let test = TestAtJoinNode {
+        let test = JoinTest {
             arg_one: current_idx,
             distance_to_wme: current_condition_num - distance,
             arg_two: prev_idx,
@@ -954,7 +957,7 @@ mod tests {
 
         assert_eq!(
             test_nodes[0],
-            TestAtJoinNode {
+            JoinTest {
                 arg_one: 0,
                 distance_to_wme: 1,
                 arg_two: 2
@@ -963,7 +966,7 @@ mod tests {
 
         assert_eq!(
             test_nodes[1],
-            TestAtJoinNode {
+            JoinTest {
                 arg_one: 1,
                 distance_to_wme: 0,
                 arg_two: 2
@@ -982,7 +985,7 @@ mod tests {
 
         assert_eq!(
             result[0],
-            TestAtJoinNode {
+            JoinTest {
                 arg_one: 0,
                 distance_to_wme: 1,
                 arg_two: 0
@@ -1001,7 +1004,7 @@ mod tests {
 
         assert_eq!(
             result[0],
-            TestAtJoinNode {
+            JoinTest {
                 arg_one: 0,
                 distance_to_wme: 0,
                 arg_two: 2
@@ -1009,7 +1012,7 @@ mod tests {
         );
         assert_eq!(
             result[1],
-            TestAtJoinNode {
+            JoinTest {
                 arg_one: 2,
                 distance_to_wme: 1,
                 arg_two: 0
