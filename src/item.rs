@@ -497,13 +497,14 @@ impl Token {
                 }
             }
         }
-        let _ = node;
+
+        let _ = node; // rust pls
     }
 
     /// Run `delete_self_and_descendants` on the provided children vec
     #[inline]
-    pub fn delete_descendants(mut children: Vec<ReteToken>) {
-        while let Some(child) = children.pop() {
+    pub fn delete_descendants(children: Vec<ReteToken>) {
+        for child in children.into_iter() {
             Self::delete_self_and_descendants(child);
         }
     }

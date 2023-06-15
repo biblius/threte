@@ -131,13 +131,13 @@ impl Rete {
         println!("Removing WME {} from working memory", wme.borrow());
 
         let mut wme = wme.borrow_mut();
-        let mut tokens = std::mem::take(&mut wme.tokens);
+        let tokens = std::mem::take(&mut wme.tokens);
         let n_join_results = std::mem::take(&mut wme.negative_join_results);
 
         drop(wme);
 
         // Remove all tokens representing the wme
-        while let Some(token) = tokens.pop() {
+        for token in tokens.into_iter() {
             Token::delete_self_and_descendants(token)
         }
 
@@ -392,16 +392,13 @@ impl Rete {
                     }
                 }
             }
-            NodeRemove::Beta(mut tokens) => {
-                while let Some(token) = tokens.pop() {
+            NodeRemove::Beta(tokens) => {
+                for token in tokens.into_iter() {
                     Token::delete_self_and_descendants(token)
                 }
             }
-            NodeRemove::Negative {
-                alpha_mem,
-                mut tokens,
-            } => {
-                while let Some(token) = tokens.pop() {
+            NodeRemove::Negative { alpha_mem, tokens } => {
+                for token in tokens.into_iter() {
                     Token::delete_self_and_descendants(token)
                 }
 
@@ -426,17 +423,15 @@ impl Rete {
             }
             NodeRemove::Ncc {
                 partner,
-                mut ncc_tokens,
+                ncc_tokens,
             } => {
                 self.delete_node_and_unused_ancestors(partner, constant_tests);
-                while let Some(token) = ncc_tokens.pop() {
+                for token in ncc_tokens.into_iter() {
                     Token::delete_self_and_descendants(token)
                 }
             }
-            NodeRemove::NccPartner {
-                mut ncc_partner_tokens,
-            } => {
-                while let Some(token) = ncc_partner_tokens.pop() {
+            NodeRemove::NccPartner { ncc_partner_tokens } => {
+                for token in ncc_partner_tokens.into_iter() {
                     Token::delete_self_and_descendants(token)
                 }
             }

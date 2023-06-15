@@ -7,18 +7,19 @@ The Rete implementation closely follows [this amazing paper](http://reports-arch
 ## Todo
 
 - Rete
-  - [x] Network
+  - [x] Network (Alpha, Beta, Join, Negative, NCC nodes)
   - [] Node Unlinking
   - [] In place WME modification
   - [] Lazy matching
   - [] Flavor of rete with collection oriented match (use trait to represent wme?)
-  - [] Check performance with raw pointer vs Rc\<RefCell>>
+  - [] Check performance with raw pointer vs Rc\<RefCell\<T>>
 - Engine
   - [] Rules
   - [] Rete bridge
   - [] Production queue
+- Misc
   - [] Benchmarks
-  - [] Visualiser
+  - [] Simple Rete Visualiser
   - [] Examples
 
 The long term goal is to create a working rule engine a la Drools, using rust macros as the main method for writing rules.
@@ -34,3 +35,7 @@ the network, the network-construction routines are given a list of its condition
 constraint on the order, though, because negative nodes need to be able to access the appropriate
 variable bindings in tokens, and the tokens "seen" by negative nodes indicate only variable
 bindings from earlier conditions, i.e., conditions higher up in the network."
+
+## Motivation
+
+Rete and Rust are cool and fun, also something something AI world domination
