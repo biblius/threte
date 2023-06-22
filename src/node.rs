@@ -45,23 +45,23 @@ impl Node {
     }
 
     #[inline]
-    pub fn children(&self) -> Option<&[ReteNode]> {
+    pub fn children(&self) -> &[ReteNode] {
         match self {
-            Node::Beta(node) if !node.children.is_empty() => Some(&node.children),
-            Node::Join(node) if !node.children.is_empty() => Some(&node.children),
-            Node::Negative(node) if !node.children.is_empty() => Some(&node.children),
-            Node::Ncc(node) if !node.children.is_empty() => Some(&node.children),
-            _ => None,
+            Node::Beta(node) => &node.children,
+            Node::Join(node) => &node.children,
+            Node::Negative(node) => &node.children,
+            Node::Ncc(node) => &node.children,
+            _ => &[],
         }
     }
 
     #[inline]
-    pub fn tokens(&self) -> Option<&[RcCell<Token>]> {
+    pub fn tokens(&self) -> &[RcCell<Token>] {
         match self {
-            Node::Beta(node) if !node.items.is_empty() => Some(&node.items),
-            Node::Negative(node) if !node.items.is_empty() => Some(&node.items),
-            Node::Ncc(node) if !node.items.is_empty() => Some(&node.items),
-            _ => None,
+            Node::Beta(node) => &node.items,
+            Node::Negative(node) => &node.items,
+            Node::Ncc(node) => &node.items,
+            _ => &[],
         }
     }
 
@@ -148,6 +148,122 @@ impl Node {
         }
     }
 
+    /// If the node is a join or negative node, this method will remove it from
+    /// its corresponding alpha memory if the node does not contain any more items.
+    ///
+    /// Right unlinking makes sure no unnecessary work is performed when traversing the Rete
+    /// due to activations.
+    #[inline]
+    pub fn right_unlink(&self) {
+        match self {
+            Node::Beta(node) => {
+                if node.items.is_empty() {
+                    for child in node.children.iter() {
+                        if let Node::Join(ref join) = *child.borrow() {
+                            join.alpha_mem
+                                .borrow_mut()
+                                .successors
+                                .retain(|suc| suc.borrow().id() != join.id);
+                        }
+                        if let Node::Negative(ref negative) = *child.borrow() {
+                            negative
+                                .alpha_mem
+                                .borrow_mut()
+                                .successors
+                                .retain(|suc| suc.borrow().id() != negative.id);
+                        }
+                        match &mut *child.borrow_mut() {
+                            Node::Join(node) => {
+                                node.right_linked = false;
+                            }
+                            Node::Negative(node) => {
+                                node.right_linked = false;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Node::Negative(node) => {
+                if node.items.is_empty() {
+                    node.alpha_mem
+                        .borrow_mut()
+                        .successors
+                        .retain(|suc| suc.borrow().id() != node.id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Right relinking must take into account the ordering of the successors in the alpha memory, as we
+    /// always want to activate descendants before ancestors.
+    #[inline]
+    pub fn relink_to_alpha_mem(node: &ReteNode) {
+        match &*node.borrow() {
+            Node::Join(join) => {
+                let mut ancestor = join.nearest_ancestor.clone();
+                while let Some(anc) = ancestor.clone() {
+                    let anc = &*anc.borrow();
+                    if !anc.is_right_linked() {
+                        ancestor = anc.nearest_ancestor();
+                    }
+                }
+                if let Some(anc) = ancestor {
+                    let index = join
+                        .alpha_mem
+                        .borrow()
+                        .successors
+                        .iter()
+                        .position(|suc| suc.borrow().id() == anc.borrow().id())
+                        .unwrap();
+                    join.alpha_mem
+                        .borrow_mut()
+                        .successors
+                        .insert(index, Rc::clone(node))
+                } else {
+                    join.alpha_mem.borrow_mut().successors.push(Rc::clone(node))
+                }
+            }
+            Node::Negative(negative) => {
+                let mut ancestor = negative.nearest_ancestor.clone();
+                while let Some(anc) = ancestor.clone() {
+                    let anc = &*anc.borrow();
+                    if !anc.is_right_linked() {
+                        ancestor = anc.nearest_ancestor();
+                    }
+                }
+                if let Some(anc) = ancestor {
+                    let index = negative
+                        .alpha_mem
+                        .borrow()
+                        .successors
+                        .iter()
+                        .position(|suc| suc.borrow().id() == anc.borrow().id())
+                        .unwrap();
+                    negative
+                        .alpha_mem
+                        .borrow_mut()
+                        .successors
+                        .insert(index, Rc::clone(node))
+                } else {
+                    negative
+                        .alpha_mem
+                        .borrow_mut()
+                        .successors
+                        .push(Rc::clone(node))
+                }
+            }
+            _ => {}
+        };
+
+        match &mut *node.borrow_mut() {
+            Node::Join(node) => node.right_linked = true,
+            Node::Negative(node) => node.right_linked = true,
+            _ => {}
+        }
+    }
+
     #[inline]
     pub fn add_token(&mut self, token: &RcCell<Token>) {
         match self {
@@ -166,6 +282,33 @@ impl Node {
             Node::Negative(negative) => negative.items.retain(|tok| tok.borrow().id() != id),
             Node::Ncc(ncc) => ncc.items.retain(|tok| tok.borrow().id() != id),
             _ => unreachable!("Node cannot contain tokens"),
+        }
+    }
+
+    #[inline]
+    pub fn is_left_linked(&self) -> bool {
+        match self {
+            Node::Join(node) => node.left_linked,
+            Node::Negative(node) => node.right_linked,
+            _ => true,
+        }
+    }
+
+    #[inline]
+    pub fn is_right_linked(&self) -> bool {
+        match self {
+            Node::Join(node) => node.right_linked,
+            Node::Negative(node) => node.right_linked,
+            _ => true,
+        }
+    }
+
+    #[inline]
+    pub fn nearest_ancestor(&self) -> Option<ReteNode> {
+        match self {
+            Node::Join(node) => node.nearest_ancestor.clone(),
+            Node::Negative(node) => node.nearest_ancestor.clone(),
+            _ => None,
         }
     }
 }
@@ -233,45 +376,32 @@ impl BetaMemoryNode {
 pub struct JoinNode {
     pub id: usize,
     pub parent: ReteNode,
-    pub alpha_memory: RcCell<AlphaMemoryNode>,
+    pub alpha_mem: RcCell<AlphaMemoryNode>,
     pub children: Vec<ReteNode>,
     pub tests: Vec<JoinTest>,
+    /// Indicates the nearest ancestor node with the same
+    /// alpha memory as this one. Used for relinking.
+    pub nearest_ancestor: Option<ReteNode>,
+    pub left_linked: bool,
+    pub right_linked: bool,
 }
 
 impl JoinNode {
     pub fn new(
         parent: &ReteNode,
-        alpha_memory: &RcCell<AlphaMemoryNode>,
+        alpha_mem: &RcCell<AlphaMemoryNode>,
         tests: Vec<JoinTest>,
     ) -> Self {
         Self {
             id: beta_node_id(),
             parent: parent.clone(),
-            alpha_memory: alpha_memory.clone(),
+            alpha_mem: alpha_mem.clone(),
             children: vec![],
             tests,
+            nearest_ancestor: None,
+            left_linked: false,
+            right_linked: false,
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct ProductionNode {
-    pub id: usize,
-    pub parent: ReteNode,
-    pub production: Production,
-}
-
-impl ProductionNode {
-    pub fn new(prod: Production, parent: &ReteNode) -> Self {
-        let node = Self {
-            id: prod.id,
-            parent: Rc::clone(parent),
-            production: prod,
-        };
-
-        println!("Created production node {node}");
-
-        node
     }
 }
 
@@ -287,6 +417,9 @@ pub struct NegativeNode {
     pub items: Vec<RcCell<Token>>,
     pub alpha_mem: RcCell<AlphaMemoryNode>,
     pub tests: Vec<JoinTest>,
+    pub nearest_ancestor: Option<ReteNode>,
+    pub left_linked: bool,
+    pub right_linked: bool,
 }
 
 impl NegativeNode {
@@ -302,10 +435,24 @@ impl NegativeNode {
             tests,
             parent: Rc::clone(parent),
             children: vec![],
+            nearest_ancestor: None,
+            left_linked: false,
+            right_linked: false,
         }
     }
 }
 
+impl PartialEq for NegativeNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.items == other.items
+            && self.alpha_mem == other.alpha_mem
+            && self.tests == other.tests
+    }
+}
+
+/// The subnetwork formed by an NCC node contains no matches, it means the NCC node is eligible
+/// for activation.
 #[derive(Debug)]
 pub struct NccNode {
     pub id: usize,
@@ -314,7 +461,7 @@ pub struct NccNode {
     pub items: Vec<RcCell<Token>>,
 
     /// This field is an option solely because we cannot construct an ncc node and its
-    /// partner simultaneously so we need some kind of way to instantiate one without the other.
+    /// partner simultaneously so we need some kind of way to instantiate one without the other. (in safe code)
     ///
     /// This will never be None while the node is alive in the network.
     pub partner: Option<ReteNode>,
@@ -353,12 +500,24 @@ impl NccPartnerNode {
     }
 }
 
-impl PartialEq for NegativeNode {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.items == other.items
-            && self.alpha_mem == other.alpha_mem
-            && self.tests == other.tests
+#[derive(Debug)]
+pub struct ProductionNode {
+    pub id: usize,
+    pub parent: ReteNode,
+    pub production: Production,
+}
+
+impl ProductionNode {
+    pub fn new(prod: Production, parent: &ReteNode) -> Self {
+        let node = Self {
+            id: prod.id,
+            parent: Rc::clone(parent),
+            production: prod,
+        };
+
+        println!("Created production node {node}");
+
+        node
     }
 }
 

@@ -123,6 +123,16 @@ impl Rete {
                     .borrow_mut()
                     .items
                     .retain(|item| item.borrow().wme.borrow().id != id);
+
+                // The alpha memory just became empty, left unlink the corresponding
+                // join node
+                if memory.borrow().items.is_empty() {
+                    for successor in memory.borrow().successors.iter() {
+                        if let Node::Join(join) = &*successor.borrow() {
+                            join.parent.borrow_mut().remove_child(join.id)
+                        }
+                    }
+                }
             }
         }
 
@@ -146,13 +156,11 @@ impl Rete {
         for result in n_join_results {
             let result = result.borrow();
 
-            let is_empty = result.owner.borrow_mut().remove_ncc_result(result.id);
+            let is_empty = result.owner.borrow_mut().remove_join_result(result.id);
 
             if is_empty {
-                if let Some(children) = result.owner.borrow().node().borrow().children() {
-                    for child in children {
-                        activate_left(child, &result.owner, None);
-                    }
+                for child in result.owner.borrow().node().borrow().children() {
+                    activate_left(child, &result.owner, None);
                 }
             }
         }
@@ -351,7 +359,7 @@ impl Rete {
 
         let remove_result = match &mut *node.borrow_mut() {
             Node::Join(ref mut join) => NodeRemove::Join {
-                alpha_mem: Rc::clone(&join.alpha_memory),
+                alpha_mem: Rc::clone(&join.alpha_mem),
             },
             Node::Beta(beta) => NodeRemove::Beta(std::mem::take(&mut beta.items)),
             Node::Production(_) => NodeRemove::Production,
@@ -451,9 +459,11 @@ impl Rete {
                 parent
                     .borrow()
                     .children()
-                    .map(|c| c.iter().map(|n| n.borrow().id()).collect::<Vec<_>>())
+                    .iter()
+                    .map(|n| n.borrow().id())
+                    .collect::<Vec<_>>()
             );
-            if parent.borrow().children().is_none() {
+            if parent.borrow().children().is_empty() {
                 self.delete_node_and_unused_ancestors(parent, constant_tests);
             }
         }
@@ -461,7 +471,7 @@ impl Rete {
 }
 
 /// This procedures is triggered whenever a new production enters the system and its job is to find
-/// potential existing matches for the newly created production by traversing the parent node
+/// potential existing matches for the newly created production by checking the parent node
 /// and propagating activations if matches are found.
 fn update_new_node_with_matches_from_above(node: &ReteNode) {
     println!("Updating node {}", node.borrow());
@@ -501,7 +511,7 @@ fn update_new_node_with_matches_from_above(node: &ReteNode) {
 
     match *parent.borrow() {
         Node::Join(ref join) => join
-            .alpha_memory
+            .alpha_mem
             .borrow()
             .items
             .iter()
@@ -528,6 +538,9 @@ fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, wme: &RcCell<
 
     println!("-> Activating Alpha Node: {alpha_mem}");
 
+    // As successors are added to alpha memories, they will be descendents of previous
+    // join nodes. In order to mitigate token duplication, desdendents must be right activated
+    // before ancestors
     alpha_mem
         .successors
         .iter()
@@ -549,6 +562,35 @@ fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, wme: &RcCell<
 ///
 /// Left activating production nodes causes them to execute whatever is specified in their production.
 fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcCell<Wme>>) {
+    // Relink the appropriate nodes to their corresponding alpha mems if they are unlinked
+    let relink_join = if let Node::Join(ref join) = *node.borrow() {
+        !join.right_linked
+    } else {
+        false
+    };
+
+    if relink_join {
+        Node::relink_to_alpha_mem(node);
+    }
+
+    // Left unlink the node if there are no more items in its alpha memory
+    if let Node::Join(ref mut join) = *node.borrow_mut() {
+        if join.alpha_mem.borrow().items.is_empty() {
+            //join.parent.borrow_mut().remove_child(join.id);
+            join.left_linked = false
+        }
+    }
+
+    let relink_neg = if let Node::Negative(ref neg) = *node.borrow() {
+        neg.items.is_empty()
+    } else {
+        false
+    };
+
+    if relink_neg {
+        Node::relink_to_alpha_mem(node);
+    }
+
     match &mut *node.borrow_mut() {
         Node::Beta(ref mut beta_node) => {
             println!("<- Left activating beta {}", beta_node.id,);
@@ -565,7 +607,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
         Node::Join(ref mut join_node) => {
             println!("<- Left activating join {}", join_node.id);
 
-            for item in join_node.alpha_memory.borrow().items.iter() {
+            for item in join_node.alpha_mem.borrow().items.iter() {
                 if join_test(&join_node.tests, parent_token, &item.borrow().wme.borrow()) {
                     join_node.children.iter().for_each(|child| {
                         activate_left(child, parent_token, Some(&item.borrow().wme))
@@ -705,6 +747,29 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
 /// Right activations are caused by [AlphaMemoryNode]s when [WME][Wme]s are changed or
 /// when new [WME][Wme]s enter the network
 fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
+    let (mut l_link, mut r_link) = (true, true);
+    if let Node::Join(ref join) = *node.borrow() {
+        l_link = join.left_linked;
+        r_link = join.right_linked;
+        // The activation comes from an alpha memory that just became non-empty so we need
+        // to relink the join node to the beta network.
+        if !join.left_linked {
+            join.parent.borrow_mut().add_child(node);
+            // Subsequently if the beta is empty, we need to right unlink the node
+            if join.parent.borrow().tokens().is_empty() {
+                join.alpha_mem
+                    .borrow_mut()
+                    .successors
+                    .retain(|suc| suc.borrow().id() != join.id);
+                r_link = false;
+            }
+            l_link = true;
+        }
+    }
+    if let Node::Join(ref mut join) = *node.borrow_mut() {
+        join.left_linked = l_link;
+        join.right_linked = r_link;
+    }
     let node = &*node.borrow();
     println!("-> Right activating {} {}", node._type(), node.id());
     match node {
@@ -747,13 +812,12 @@ fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
 
 fn build_or_share_beta_memory_node(parent: &ReteNode) -> ReteNode {
     println!("Building/sharing beta node with parent {}", parent.borrow());
-    if let Some(children) = parent.borrow().children() {
-        // Look for an existing beta node to share
-        for child in children {
-            if let Node::Beta(ref beta) = *child.borrow() {
-                println!("Shared {beta}");
-                return Rc::clone(child);
-            }
+
+    // Look for an existing beta node to share
+    for child in parent.borrow().children() {
+        if let Node::Beta(ref beta) = *child.borrow() {
+            println!("Shared {beta}");
+            return Rc::clone(child);
         }
     }
 
@@ -773,16 +837,13 @@ fn build_or_share_join_node(
     alpha_memory: &RcCell<AlphaMemoryNode>,
     tests: Vec<JoinTest>,
 ) -> ReteNode {
-    if let Some(children) = parent.borrow().children() {
-        // Look for an existing join node to share
-        for child in children {
-            if let Node::Join(node) = &*child.borrow() {
-                if node.tests.as_slice() == tests
-                    && *node.alpha_memory.borrow() == *alpha_memory.borrow()
-                {
-                    println!("Sharing {node}");
-                    return Rc::clone(child);
-                }
+    // Look for an existing join node to share
+    for child in parent.borrow().children() {
+        if let Node::Join(node) = &*child.borrow() {
+            if node.tests.as_slice() == tests && *node.alpha_mem.borrow() == *alpha_memory.borrow()
+            {
+                println!("Sharing {node}");
+                return Rc::clone(child);
             }
         }
     }
@@ -804,13 +865,11 @@ fn build_or_share_negative_node(
     alpha_memory: &RcCell<AlphaMemoryNode>,
     tests: Vec<JoinTest>,
 ) -> ReteNode {
-    if let Some(children) = parent.borrow().children() {
-        for child in children {
-            if let Node::Negative(node) = &*child.borrow() {
-                if *node.alpha_mem.borrow() == *alpha_memory.borrow() && node.tests == tests {
-                    println!("Sharing {node}");
-                    return Rc::clone(child);
-                }
+    for child in parent.borrow().children() {
+        if let Node::Negative(node) = &*child.borrow() {
+            if *node.alpha_mem.borrow() == *alpha_memory.borrow() && node.tests == tests {
+                println!("Sharing {node}");
+                return Rc::clone(child);
             }
         }
     }

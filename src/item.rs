@@ -162,19 +162,6 @@ impl PartialEq for Token {
     }
 }
 
-/// Used to destructure the token so as to avoid keeping a mutable reference to the original
-/// when deleting
-struct DestructuredToken {
-    id: usize,
-    node: ReteNode,
-    parent: Option<ReteToken>,
-    children: Vec<ReteToken>,
-    wme: Option<RcCell<Wme>>,
-    join_results: Vec<RcCell<NegativeJoinResult>>,
-    ncc_results: Vec<ReteToken>,
-    owner: Option<ReteToken>,
-}
-
 impl Token {
     /// Mutably borrows the parent_token and wme to append them to their
     /// respective lists
@@ -468,18 +455,33 @@ impl Token {
             parent.borrow_mut().remove_child(id);
         }
 
-        for result in join_results {
-            result
-                .borrow()
-                .wme
-                .borrow_mut()
-                .negative_join_results
-                .retain(|res| res.borrow().id != result.borrow().id)
+        // Right unlink the token's node if it became empty, the check is done in the method
+        node.borrow().right_unlink();
+        if let Node::Negative(ref mut neg) = *node.borrow_mut() {
+            neg.right_linked = false;
         }
 
+        // Remove all negative join results from corresponding WME
+        for result in join_results {
+            let result = result.borrow();
+            let wme = &mut *result.wme.borrow_mut();
+            println!(
+                "Removing result from WME {}'s negative join results",
+                wme.id
+            );
+            wme.negative_join_results
+                .retain(|res| res.borrow().id != result.id)
+        }
+
+        // Remove all NCC results from corresponding WME
         for result in ncc_results {
             let result = &mut result.borrow_mut();
             if let Some(wme) = result.base_mut().wme.take() {
+                println!(
+                    "Removing token {} from WME {}'s NCC results",
+                    result.id(),
+                    wme.borrow().id
+                );
                 wme.borrow_mut().tokens.retain(|t| t.borrow().id() != id)
             }
 
@@ -489,10 +491,8 @@ impl Token {
         if let Node::NccPartner(node) = &*node.borrow() {
             if let Some(owner) = owner {
                 if owner.borrow_mut().remove_ncc_result(id) {
-                    if let Some(children) = node.ncc_node.borrow().children() {
-                        for child in children {
-                            activate_left(child, &owner, None)
-                        }
+                    for child in node.ncc_node.borrow().children() {
+                        activate_left(child, &owner, None)
                     }
                 }
             }
@@ -588,6 +588,19 @@ impl Token {
 }
 
 impl IntoCell for Token {}
+
+/// Used to destructure the token so as to avoid keeping a mutable reference to the original
+/// when deleting
+struct DestructuredToken {
+    id: usize,
+    node: ReteNode,
+    parent: Option<ReteToken>,
+    children: Vec<ReteToken>,
+    wme: Option<RcCell<Wme>>,
+    join_results: Vec<RcCell<NegativeJoinResult>>,
+    ncc_results: Vec<ReteToken>,
+    owner: Option<ReteToken>,
+}
 
 /// Enables for quick splicing of WMEs. Since a single WME could be located
 /// in many alpha memories, this serves as an indirection that points to it.

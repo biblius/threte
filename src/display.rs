@@ -491,9 +491,7 @@ fn write_beta_network(buf: &mut String, node: &ReteNode) {
     )
     .unwrap();
 
-    let Some(children) = node.children() else { return; };
-
-    for child in children {
+    for child in node.children() {
         write_beta_network(buf, child)
     }
 }

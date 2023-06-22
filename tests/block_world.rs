@@ -134,7 +134,7 @@ fn add_productions_and_wmes_then_remove() {
     rete.print_to_file("add_productions_and_wmes_then_remove/1_wmes_removed.txt")
         .unwrap();
 
-    println!("{}", rete.dummy_top_node.borrow().children().unwrap().len());
+    println!("{}", rete.dummy_top_node.borrow().children().len());
     println!("{}", rete.dummy_top_token.borrow().children().len());
     assert!(rete.working_memory.is_empty());
     assert_eq!(rete.dummy_top_token.borrow().children().len(), 1);
@@ -143,7 +143,7 @@ fn add_productions_and_wmes_then_remove() {
     rete.remove_production(prod_id2);
 
     assert!(rete.productions.is_empty());
-    assert!(rete.dummy_top_node.borrow().children().is_none());
+    assert!(rete.dummy_top_node.borrow().children().is_empty());
 
     reset()
 }
@@ -243,7 +243,7 @@ fn simple_production_removal() {
 
     assert!(removed);
     assert!(rete.productions.is_empty());
-    assert!(rete.dummy_top_node.borrow().children().is_none());
+    assert!(rete.dummy_top_node.borrow().children().is_empty());
 
     reset();
 }
