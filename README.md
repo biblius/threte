@@ -8,7 +8,7 @@ The Rete implementation closely follows [this amazing paper](http://reports-arch
 
 - Rete
   - [x] Network (Alpha, Beta, Join, Negative, NCC nodes)
-  - [] Node Unlinking (probably warrants refactoring the way nodes are linked)
+  - [x] Node Unlinking
   - [] In place WME modification
   - [] Lazy matching
   - [] Flavor of rete with collection oriented match (use trait to represent wme?)

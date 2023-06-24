@@ -5,7 +5,7 @@ use crate::{
     },
     node::{
         AlphaMemoryNode, BetaMemoryNode, JoinNode, NccNode, NccPartnerNode, NegativeNode, Node,
-        ProductionNode, ReteNode,
+        ProductionNode, ReteNode, DUMMY_NODE_ID,
     },
     RcCell, Rete,
 };
@@ -83,8 +83,12 @@ impl Display for ProductionNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,
-            "Prod {{ id: {}, production: {} }}",
-            self.id, self.production
+            "Prod {{ id: {}, parent: {}, production: {} }}",
+            self.id,
+            self.parent
+                .try_borrow()
+                .map_or("borrowed".to_string(), |p| p.id().to_string()),
+            self.production
         )
     }
 }
@@ -145,7 +149,7 @@ impl Display for NegativeNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,
-            "Negative {{ id: {}, parent {:?}, children: {:?}, items: {:?} , tests: {:?} }}",
+            "Negative {{ id: {}, parent {:?}, children: {:?}, items: {:?} , tests: {:?}, right_linked: {} }}",
             self.id,
             self.parent.try_borrow().map(|p| p.id()),
             self.children
@@ -156,7 +160,8 @@ impl Display for NegativeNode {
                 .iter()
                 .map(|item| item.borrow().id())
                 .collect::<Vec<_>>(),
-            self.tests.iter().collect::<Vec<_>>()
+            self.tests.iter().collect::<Vec<_>>(),
+            self.right_linked
         )
     }
 }
@@ -184,14 +189,17 @@ impl Display for JoinNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,
-            "Join {{ id: {}, parent: {:?}, children: {:?}, tests: {:?} }}",
+            "Join {{ id: {}, parent: {:?}, children: {:?}, tests: {:?}, left_linked: {}, right_linked: {}, alpha_ancestor: {:?} }}",
             self.id,
             self.parent.borrow().id(),
             self.children
                 .iter()
                 .map(|node| node.borrow().id())
                 .collect::<Vec<_>>(),
-            self.tests.iter().collect::<Vec<_>>()
+            self.tests.iter().collect::<Vec<_>>(),
+            self.left_linked,
+            self.right_linked,
+            self.nearest_ancestor.as_ref().map(|a|a.borrow().id())
         )
     }
 }
@@ -482,6 +490,7 @@ fn write_alpha_network(buf: &mut String, alpha: &HashMap<ConstantTest, RcCell<Al
 fn write_beta_network(buf: &mut String, node: &ReteNode) {
     let count = Rc::strong_count(node);
     let node = node.borrow();
+
     writeln!(
         buf,
         "{}{}, refs: {}",
@@ -491,8 +500,14 @@ fn write_beta_network(buf: &mut String, node: &ReteNode) {
     )
     .unwrap();
 
-    for child in node.children() {
-        write_beta_network(buf, child)
+    if node.id() == DUMMY_NODE_ID {
+        for child in node.children() {
+            write_beta_network(buf, child)
+        }
+    } else {
+        for child in node.all_children() {
+            write_beta_network(buf, child)
+        }
     }
 }
 
