@@ -492,7 +492,7 @@ impl Token {
             if let Some(owner) = owner {
                 if owner.borrow_mut().remove_ncc_result(id) {
                     for child in node.ncc_node.borrow().children() {
-                        activate_left(child, &owner, None)
+                        activate_left(child, &owner, None);
                     }
                 }
             }

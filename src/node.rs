@@ -56,6 +56,17 @@ impl Node {
     }
 
     #[inline]
+    pub fn all_children(&self) -> &[ReteNode] {
+        match self {
+            Node::Beta(node) => &node.all_children,
+            Node::Join(node) => &node.children,
+            Node::Negative(node) => &node.children,
+            Node::Ncc(node) => &node.children,
+            _ => &[],
+        }
+    }
+
+    #[inline]
     pub fn tokens(&self) -> &[RcCell<Token>] {
         match self {
             Node::Beta(node) => &node.items,
@@ -174,9 +185,11 @@ impl Node {
                         }
                         match &mut *child.borrow_mut() {
                             Node::Join(node) => {
+                                println!("💥 Right unlinking {}", node.id);
                                 node.right_linked = false;
                             }
                             Node::Negative(node) => {
+                                println!("💥 Right unlinking {}", node.id);
                                 node.right_linked = false;
                             }
                             _ => {}
@@ -202,13 +215,31 @@ impl Node {
     pub fn relink_to_alpha_mem(node: &ReteNode) {
         match &*node.borrow() {
             Node::Join(join) => {
+                println!(
+                    "🔗 Relinking join {} to alpha memory {}",
+                    join.id,
+                    join.alpha_mem.borrow().id
+                );
                 let mut ancestor = join.nearest_ancestor.clone();
                 while let Some(anc) = ancestor.clone() {
-                    let anc = &*anc.borrow();
+                    let anc = anc.borrow();
                     if !anc.is_right_linked() {
                         ancestor = anc.nearest_ancestor();
+                        continue;
                     }
+                    break;
                 }
+                println!(
+                    "Found nearest ancestor with same alpha mem: {:?}",
+                    ancestor.as_ref().map(|a| a.borrow().id())
+                );
+                // We have to maintain the ordering of the ancestor, i.e. we always
+                // need to make sure descendants get activated before ancestors. We
+                // know the current node is a descendant and must be activated before its
+                // nearest ancestor.
+
+                // We are placing the descendant immediatelly after the ancestor because
+                // the successors get activated in reverse order
                 if let Some(anc) = ancestor {
                     let index = join
                         .alpha_mem
@@ -220,7 +251,7 @@ impl Node {
                     join.alpha_mem
                         .borrow_mut()
                         .successors
-                        .insert(index, Rc::clone(node))
+                        .insert(index + 1, Rc::clone(node))
                 } else {
                     join.alpha_mem.borrow_mut().successors.push(Rc::clone(node))
                 }
@@ -245,7 +276,7 @@ impl Node {
                         .alpha_mem
                         .borrow_mut()
                         .successors
-                        .insert(index, Rc::clone(node))
+                        .insert(index + 1, Rc::clone(node))
                 } else {
                     negative
                         .alpha_mem
@@ -311,6 +342,15 @@ impl Node {
             _ => None,
         }
     }
+
+    #[inline]
+    pub fn is_dummy(&self) -> bool {
+        if let Node::Beta(beta) = self {
+            beta.id == DUMMY_NODE_ID
+        } else {
+            false
+        }
+    }
 }
 
 /// An AlphaMemoryNode contains items through which it keeps the state of WMEs that
@@ -348,6 +388,7 @@ pub struct BetaMemoryNode {
     pub parent: Option<ReteNode>,
     pub children: Vec<ReteNode>,
     pub items: Vec<RcCell<Token>>,
+    pub all_children: Vec<ReteNode>,
 }
 
 impl BetaMemoryNode {
@@ -357,6 +398,7 @@ impl BetaMemoryNode {
             parent,
             children: vec![],
             items: vec![],
+            all_children: vec![],
         }
     }
 
@@ -367,6 +409,7 @@ impl BetaMemoryNode {
             parent: None,
             children: vec![],
             items: vec![],
+            all_children: vec![],
         }
         .to_node_cell()
     }
@@ -399,8 +442,8 @@ impl JoinNode {
             children: vec![],
             tests,
             nearest_ancestor: None,
-            left_linked: false,
-            right_linked: false,
+            left_linked: true,
+            right_linked: true,
         }
     }
 }
@@ -418,7 +461,6 @@ pub struct NegativeNode {
     pub alpha_mem: RcCell<AlphaMemoryNode>,
     pub tests: Vec<JoinTest>,
     pub nearest_ancestor: Option<ReteNode>,
-    pub left_linked: bool,
     pub right_linked: bool,
 }
 
@@ -436,8 +478,7 @@ impl NegativeNode {
             parent: Rc::clone(parent),
             children: vec![],
             nearest_ancestor: None,
-            left_linked: false,
-            right_linked: false,
+            right_linked: true,
         }
     }
 }

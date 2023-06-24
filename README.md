@@ -8,20 +8,20 @@ The Rete implementation closely follows [this amazing paper](http://reports-arch
 
 - Rete
   - [x] Network (Alpha, Beta, Join, Negative, NCC nodes)
-  - [] Node Unlinking (probably warrants refactoring the way nodes are linked)
-  - [] In place WME modification
-  - [] Lazy matching
-  - [] Flavor of rete with collection oriented match (use trait to represent wme?)
-  - [] Investigate possible optimisations with MaybeUninit
-  - [] Check performance with raw pointer vs Rc\<RefCell\<T>>
+  - [x] Node Unlinking
+  - [ ] In place WME modification
+  - [ ] Lazy matching
+  - [ ] Flavor of rete with collection oriented match (use trait to represent wme?)
+  - [ ] Investigate possible optimisations with MaybeUninit
+  - [ ] Check performance with raw pointer vs Rc\<RefCell\<T>>
 - Engine
-  - [] Rules
-  - [] Rete bridge
-  - [] Production queue
+  - [ ] Rules
+  - [ ] Rete bridge
+  - [ ] Production queue
 - Misc
-  - [] Benchmarks
-  - [] Simple Rete Visualiser
-  - [] Examples
+  - [ ] Benchmarks
+  - [ ] Simple Rete Visualiser
+  - [ ] Examples
 
 The long term goal is to create a working rule engine with the ability to create a machine that 'learns'.
 

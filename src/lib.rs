@@ -202,7 +202,7 @@ impl Rete {
 
         let mut tests = vec![];
         {
-            let Node::Production(prod) = &*production.borrow() else { panic!("Should not be possible")};
+            let Node::Production(prod) = &*production.borrow() else { panic!("Rust no longer works")};
             conditions_to_constant_tests(&mut tests, &prod.production.conditions);
         }
 
@@ -339,10 +339,15 @@ impl Rete {
         // Used to avoid a mutable reference when recursively deleting node references from tokens
         enum NodeRemove {
             Join {
+                id: usize,
+                parent: ReteNode,
+                left_linked: bool,
+                right_linked: bool,
                 alpha_mem: RcCell<AlphaMemoryNode>,
             },
             Beta(Vec<RcCell<Token>>),
             Negative {
+                right_linked: bool,
                 alpha_mem: RcCell<AlphaMemoryNode>,
                 tokens: Vec<RcCell<Token>>,
             },
@@ -359,11 +364,16 @@ impl Rete {
 
         let remove_result = match &mut *node.borrow_mut() {
             Node::Join(ref mut join) => NodeRemove::Join {
+                id: join.id,
+                parent: Rc::clone(&join.parent),
+                left_linked: join.left_linked,
+                right_linked: join.right_linked,
                 alpha_mem: Rc::clone(&join.alpha_mem),
             },
             Node::Beta(beta) => NodeRemove::Beta(std::mem::take(&mut beta.items)),
             Node::Production(_) => NodeRemove::Production,
             Node::Negative(negative) => NodeRemove::Negative {
+                right_linked: negative.right_linked,
                 alpha_mem: Rc::clone(&negative.alpha_mem),
                 tokens: std::mem::take(&mut negative.items),
             },
@@ -380,12 +390,28 @@ impl Rete {
         };
 
         match remove_result {
-            NodeRemove::Join { alpha_mem } => {
-                {
+            NodeRemove::Join {
+                id,
+                parent,
+                alpha_mem,
+                left_linked,
+                right_linked,
+            } => {
+                if right_linked {
                     alpha_mem
                         .borrow_mut()
                         .successors
                         .retain(|child| child.borrow().id() != node.borrow().id());
+                }
+
+                if left_linked {
+                    if let Node::Beta(ref mut beta) = *parent.borrow_mut() {
+                        beta.all_children.retain(|child| child.borrow().id() != id);
+                    }
+                }
+
+                if parent.borrow().all_children().is_empty() {
+                    self.delete_node_and_unused_ancestors(parent, constant_tests)
                 }
 
                 if alpha_mem.borrow().successors.is_empty() {
@@ -405,12 +431,16 @@ impl Rete {
                     Token::delete_self_and_descendants(token)
                 }
             }
-            NodeRemove::Negative { alpha_mem, tokens } => {
+            NodeRemove::Negative {
+                right_linked,
+                alpha_mem,
+                tokens,
+            } => {
                 for token in tokens.into_iter() {
                     Token::delete_self_and_descendants(token)
                 }
 
-                {
+                if right_linked {
                     alpha_mem
                         .borrow_mut()
                         .successors
@@ -483,15 +513,15 @@ fn update_new_node_with_matches_from_above(node: &ReteNode) {
     // This avoids keeping the mutable borrow when recursively right activating the join node
     let children = match *parent.borrow_mut() {
         Node::Beta(ref beta) => {
-            beta.items
-                .iter()
-                .for_each(|token| activate_left(node, token, None));
+            beta.items.iter().for_each(|token| {
+                activate_left(node, token, None);
+            });
             return;
         }
         Node::Negative(ref mut negative) => {
             negative.items.iter().for_each(|token| {
                 if !token.borrow().contains_join_results() {
-                    activate_left(node, token, None)
+                    activate_left(node, token, None);
                 }
             });
             return;
@@ -499,7 +529,7 @@ fn update_new_node_with_matches_from_above(node: &ReteNode) {
         Node::Ncc(ref mut ncc) => {
             ncc.items.iter().for_each(|token| {
                 if !token.borrow().contains_ncc_results() {
-                    activate_left(node, token, None)
+                    activate_left(node, token, None);
                 }
             });
             return;
@@ -509,17 +539,22 @@ fn update_new_node_with_matches_from_above(node: &ReteNode) {
         Node::Production(_) => panic!("Production node cannot have children"),
     };
 
-    match *parent.borrow() {
-        Node::Join(ref join) => join
-            .alpha_mem
-            .borrow()
-            .items
-            .iter()
-            .for_each(|item| activate_right(&parent, &item.borrow().wme)),
+    // The rest is for the join node procedure since we cannot keep a mutable borrow when
+    // activating
+
+    let items = match *parent.borrow() {
+        Node::Join(ref join) => std::mem::take(&mut join.alpha_mem.borrow_mut().items),
         _ => unreachable!("Rust no longer works"),
+    };
+
+    for item in items.iter() {
+        activate_right(&parent, &item.borrow().wme);
     }
 
     let Node::Join(ref mut join) = *parent.borrow_mut() else { panic!("Rust no longer works") };
+
+    join.alpha_mem.borrow_mut().items = items;
+
     join.children = children;
 }
 
@@ -529,23 +564,110 @@ fn update_new_node_with_matches_from_above(node: &ReteNode) {
 fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, wme: &RcCell<Wme>) {
     let item = AlphaMemoryItem::new(wme, alpha_mem_node).to_cell();
 
-    // Insert new item at the head of the node's items
-    {
+    // Insert new item at the head of the node's items and take the successors to avoid
+    // having an active borrow when re-linking nodes
+    let successors = {
         let mut alpha_mem = alpha_mem_node.borrow_mut();
+        println!("-> Activating Alpha Node: {alpha_mem}");
         alpha_mem.items.push(Rc::clone(&item));
-    }
-    let alpha_mem = alpha_mem_node.borrow();
-
-    println!("-> Activating Alpha Node: {alpha_mem}");
+        std::mem::take(&mut alpha_mem.successors)
+    };
 
     // As successors are added to alpha memories, they will be descendents of previous
     // join nodes. In order to mitigate token duplication, desdendents must be right activated
     // before ancestors
-    alpha_mem
-        .successors
-        .iter()
-        .rev()
-        .for_each(|node| activate_right(node, wme))
+    for successor in successors.into_iter().rev() {
+        {
+            alpha_mem_node
+                .borrow_mut()
+                .successors
+                .push(Rc::clone(&successor));
+        }
+        activate_right(&successor, wme);
+    }
+}
+
+/// A right activation of a `JoinNode` will cause it to iterate through its
+/// parent's tokens and perform a [join_test] on each one and the given WME.
+///
+/// For every test that passes, a left activation is triggered on each of the node's
+/// children.
+///
+/// Right activations are caused by [AlphaMemoryNode]s when [WME][Wme]s are changed or
+/// when new [WME][Wme]s enter the network
+fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
+    println!(
+        "➡️ Right activating {} {}",
+        node.borrow()._type(),
+        node.borrow().id()
+    );
+
+    let (mut l_link, mut r_link) = (true, true);
+
+    if let Node::Join(ref join) = *node.borrow() {
+        l_link = join.left_linked;
+        r_link = join.right_linked;
+        // The activation comes from an alpha memory that just became non-empty so we need
+        // to relink the join node to the beta network.
+        if !join.left_linked {
+            println!(
+                "🔗 Relinking {} to beta memory {}",
+                join.id,
+                join.parent.borrow().id()
+            );
+            join.parent.borrow_mut().add_child(node);
+            l_link = true;
+            // Subsequently if the beta is empty, we need to right unlink the node
+            if join.parent.borrow().tokens().is_empty() {
+                println!("💥 Right unlinking {}", join.id);
+                join.alpha_mem
+                    .borrow_mut()
+                    .successors
+                    .retain(|suc| suc.borrow().id() != join.id);
+                r_link = false;
+            }
+        }
+    }
+    if let Node::Join(ref mut join) = *node.borrow_mut() {
+        join.left_linked = l_link;
+        join.right_linked = r_link;
+    }
+
+    match *node.borrow() {
+        Node::Join(ref join_node) => {
+            if let Node::Beta(ref parent) = *join_node.parent.borrow() {
+                for token in parent.items.iter() {
+                    if join_test(&join_node.tests, token, &wme.borrow()) {
+                        join_node.children.iter().for_each(|child| {
+                            activate_left(child, token, Some(wme));
+                        })
+                    }
+                }
+            }
+        }
+        Node::Negative(ref negative_node) => {
+            for token in negative_node.items.iter() {
+                if join_test(&negative_node.tests, token, &wme.borrow()) {
+                    // This check is done to see if the token's state has changed. If it previously
+                    // had negative join results and is now empty, it means we must delete all its children
+                    // since the partial matches are no longer valid.
+                    if !token.borrow().contains_join_results() {
+                        let children = std::mem::take(token.borrow_mut().children_mut());
+                        Token::delete_descendants(children);
+                    }
+                    let join_result = NegativeJoinResult::new(token, wme).to_cell();
+                    token.borrow_mut().add_join_result(&join_result);
+                    wme.borrow_mut()
+                        .negative_join_results
+                        .push(Rc::clone(&join_result))
+                }
+            }
+        }
+        Node::Beta(_) => unreachable!("Beta memory nodes are never right activated"),
+        Node::Production(_) => unreachable!("Production nodes are never right activated"),
+        Node::Ncc(_) => unreachable!("NCC nodes are never right activated"),
+        Node::NccPartner(_) => unreachable!("NCC Partner nodes are never right activated"),
+    }
 }
 
 /// Left activations occur when partial matches are found for a production's conditions and WMEs in the working memory.
@@ -561,39 +683,37 @@ fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, wme: &RcCell<
 /// activation, because it means a condition is true which should be false.
 ///
 /// Left activating production nodes causes them to execute whatever is specified in their production.
-fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcCell<Wme>>) {
+///
+/// Because of the borrow assblaster, this function returns a boolean indicating whether or not
+/// the node being activated should remain in the children list of the caller. If the function returns `false`
+/// the node should be removed from the list. Consequently, whenever a memory node has to activate its children
+/// it does so through a `retain` call.
+fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcCell<Wme>>) -> bool {
     // Relink the appropriate nodes to their corresponding alpha mems if they are unlinked
-    let relink_join = if let Node::Join(ref join) = *node.borrow() {
-        !join.right_linked
-    } else {
-        false
-    };
-
-    if relink_join {
+    if !node.borrow().is_right_linked() && matches!(&*node.borrow(), Node::Join(_)) {
         Node::relink_to_alpha_mem(node);
     }
 
-    // Left unlink the node if there are no more items in its alpha memory
+    // Left unlink the node if there are no more items in its alpha memory.
+    // This check will always be triggered when left activating from one of three node types:
+    // beta, negative and ncc.
     if let Node::Join(ref mut join) = *node.borrow_mut() {
         if join.alpha_mem.borrow().items.is_empty() {
-            //join.parent.borrow_mut().remove_child(join.id);
-            join.left_linked = false
+            // This is the only case this function will return false, since only join nodes
+            // can be left unlinked. If the join's items are empty, we return early
+            // since it only propagates the activation if it finds a match in its alpha mem's items.
+            join.left_linked = false;
+            return false;
         }
     }
 
-    let relink_neg = if let Node::Negative(ref neg) = *node.borrow() {
-        neg.items.is_empty()
-    } else {
-        false
-    };
-
-    if relink_neg {
+    if !node.borrow().is_right_linked() && matches!(&*node.borrow(), Node::Negative(_)) {
         Node::relink_to_alpha_mem(node);
     }
 
     match &mut *node.borrow_mut() {
         Node::Beta(ref mut beta_node) => {
-            println!("<- Left activating beta {}", beta_node.id,);
+            println!("⬅️ Left activating beta {}", beta_node.id,);
 
             let new_token = Token::new_beta(node, parent_token, wme);
 
@@ -601,25 +721,27 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
 
             beta_node
                 .children
-                .iter()
-                .for_each(|child| activate_left(child, &new_token, None));
+                .retain(|child| activate_left(child, &new_token, None));
+
+            true
         }
         Node::Join(ref mut join_node) => {
-            println!("<- Left activating join {}", join_node.id);
+            println!("⬅️ Left activating join {}", join_node.id);
 
             for item in join_node.alpha_mem.borrow().items.iter() {
                 if join_test(&join_node.tests, parent_token, &item.borrow().wme.borrow()) {
-                    join_node.children.iter().for_each(|child| {
-                        activate_left(child, parent_token, Some(&item.borrow().wme))
-                    });
+                    for child in join_node.children.iter() {
+                        activate_left(child, parent_token, Some(&item.borrow().wme));
+                    }
                 }
             }
+            true
         }
         Node::Negative(negative_node) => {
             let new_token = Token::new_negative(node, parent_token, wme);
 
             println!(
-                "<- Left activating negative {} and appending token {}",
+                "⬅️ Left activating negative {} and appending token {}",
                 negative_node.id,
                 new_token.borrow().id()
             );
@@ -647,13 +769,14 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
 
             // Negative nodes propagate left activations only if no tokens passed its join tests
             if !new_token.borrow().contains_join_results() {
-                for child in negative_node.children.iter() {
-                    activate_left(child, &new_token, None)
-                }
+                negative_node
+                    .children
+                    .retain(|child| activate_left(child, &new_token, None));
             }
+            true
         }
         Node::Ncc(ncc_node) => {
-            println!("<- Left activating ncc {}", ncc_node.id,);
+            println!("⬅️ Left activating ncc {}", ncc_node.id,);
             let new_token = Token::new_ncc(node, parent_token, wme);
 
             ncc_node.items.push(Rc::clone(&new_token));
@@ -673,14 +796,16 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
             }
 
             if !new_token.borrow().contains_ncc_results() {
-                for child in ncc_node.children.iter() {
-                    activate_left(child, &new_token, None)
-                }
+                ncc_node
+                    .children
+                    .retain(|child| activate_left(child, &new_token, None));
             }
+
+            true
         }
         Node::NccPartner(ncc_partner) => {
             println!(
-                "<- Left activating ncc partner {} with parent token {}",
+                "⬅️ Left activating ncc partner {} with parent token {}",
                 ncc_partner,
                 parent_token.borrow()
             );
@@ -708,7 +833,6 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
             if let Node::Ncc(ncc) = &*ncc_node.borrow() {
                 if let Some(owner) = ncc.items.iter().find(|token| {
                     let token = token.borrow();
-                    println!("SEARCHING TOKEN {token}");
                     token.parent() == owners_token.as_ref() && token.wme() == owners_wme.as_ref()
                 }) {
                     println!(
@@ -729,84 +853,16 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
                     ncc_partner.new_results.push(new_result)
                 }
             }
+
+            true
         }
         Node::Production(p_node) => {
             println!(
                 "====================\nProduction node activated! {p_node}\n===================="
-            )
-        }
-    }
-}
+            );
 
-/// A right activation of a `JoinNode` will cause it to iterate through its
-/// parent's tokens and perform a [join_test] on each one and the given WME.
-///
-/// For every test that passes, a left activation is triggered on each of the node's
-/// children.
-///
-/// Right activations are caused by [AlphaMemoryNode]s when [WME][Wme]s are changed or
-/// when new [WME][Wme]s enter the network
-fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
-    let (mut l_link, mut r_link) = (true, true);
-    if let Node::Join(ref join) = *node.borrow() {
-        l_link = join.left_linked;
-        r_link = join.right_linked;
-        // The activation comes from an alpha memory that just became non-empty so we need
-        // to relink the join node to the beta network.
-        if !join.left_linked {
-            join.parent.borrow_mut().add_child(node);
-            // Subsequently if the beta is empty, we need to right unlink the node
-            if join.parent.borrow().tokens().is_empty() {
-                join.alpha_mem
-                    .borrow_mut()
-                    .successors
-                    .retain(|suc| suc.borrow().id() != join.id);
-                r_link = false;
-            }
-            l_link = true;
+            true
         }
-    }
-    if let Node::Join(ref mut join) = *node.borrow_mut() {
-        join.left_linked = l_link;
-        join.right_linked = r_link;
-    }
-    let node = &*node.borrow();
-    println!("-> Right activating {} {}", node._type(), node.id());
-    match node {
-        Node::Join(ref join_node) => {
-            if let Node::Beta(ref parent) = *join_node.parent.borrow() {
-                for token in parent.items.iter() {
-                    if join_test(&join_node.tests, token, &wme.borrow()) {
-                        join_node
-                            .children
-                            .iter()
-                            .for_each(|child| activate_left(child, token, Some(wme)))
-                    }
-                }
-            }
-        }
-        Node::Negative(ref negative_node) => {
-            for token in negative_node.items.iter() {
-                if join_test(&negative_node.tests, token, &wme.borrow()) {
-                    // This check is done to see if the token's state has changed. If it previously
-                    // had negative join results and is now empty, it means we must delete all its children
-                    // since the partial matches are no longer valid.
-                    if !token.borrow().contains_join_results() {
-                        let children = std::mem::take(token.borrow_mut().children_mut());
-                        Token::delete_descendants(children);
-                    }
-                    let join_result = NegativeJoinResult::new(token, wme).to_cell();
-                    token.borrow_mut().add_join_result(&join_result);
-                    wme.borrow_mut()
-                        .negative_join_results
-                        .push(Rc::clone(&join_result))
-                }
-            }
-        }
-        Node::Beta(_) => unreachable!("Beta memory nodes are never right activated"),
-        Node::Production(_) => unreachable!("Production nodes are never right activated"),
-        Node::Ncc(_) => unreachable!("NCC nodes are never right activated"),
-        Node::NccPartner(_) => unreachable!("NCC Partner nodes are never right activated"),
     }
 }
 
@@ -838,7 +894,7 @@ fn build_or_share_join_node(
     tests: Vec<JoinTest>,
 ) -> ReteNode {
     // Look for an existing join node to share
-    for child in parent.borrow().children() {
+    for child in parent.borrow().all_children() {
         if let Node::Join(node) = &*child.borrow() {
             if node.tests.as_slice() == tests && *node.alpha_mem.borrow() == *alpha_memory.borrow()
             {
@@ -848,16 +904,62 @@ fn build_or_share_join_node(
         }
     }
 
-    let new = JoinNode::new(parent, alpha_memory, tests).to_node_cell();
+    let mut new = JoinNode::new(parent, alpha_memory, tests);
+
+    new.nearest_ancestor = find_ancestor_with_same_amem(parent, alpha_memory);
+
+    let new = new.to_node_cell();
+
+    parent.borrow_mut().add_child(&new);
+    if let Node::Beta(ref mut beta) = &mut *parent.borrow_mut() {
+        beta.all_children.push(Rc::clone(&new))
+    }
 
     // Add the newly created node to the alpha memory successors
     alpha_memory.borrow_mut().successors.push(Rc::clone(&new));
 
+    // Right unlink if the parent beta memory is empty
+    let parent = new.borrow().parent().unwrap();
+    if parent.borrow().tokens().is_empty() {
+        alpha_memory
+            .borrow_mut()
+            .successors
+            .retain(|suc| suc.borrow().id() != new.borrow().id());
+        if let Node::Join(join) = &mut *new.borrow_mut() {
+            println!("💥 Right unlinking {}", join.id);
+            join.right_linked = false;
+        }
+        // Left unlink if the parent alpha memory is empty
+    } else if alpha_memory.borrow().items.is_empty() {
+        parent.borrow_mut().remove_child(new.borrow().id());
+        if let Node::Join(join) = &mut *new.borrow_mut() {
+            println!("💥 Left unlinking {}", join.id);
+            join.left_linked = false;
+        }
+    }
+
     println!("Built {}", new.borrow());
 
-    parent.borrow_mut().add_child(&new);
-
     new
+}
+
+fn find_ancestor_with_same_amem(
+    node: &ReteNode,
+    alpha_memory: &RcCell<AlphaMemoryNode>,
+) -> Option<ReteNode> {
+    if node.borrow().is_dummy() {
+        return None;
+    }
+
+    match *node.borrow() {
+        Node::Join(ref join) if &join.alpha_mem == alpha_memory => Some(Rc::clone(node)),
+        Node::Negative(ref neg) if &neg.alpha_mem == alpha_memory => Some(Rc::clone(node)),
+        Node::Ncc(ref ncc) => {
+            let partner_parent = ncc.partner.as_ref().unwrap().borrow().parent().unwrap();
+            find_ancestor_with_same_amem(&partner_parent, alpha_memory)
+        }
+        _ => return find_ancestor_with_same_amem(&node.borrow().parent().unwrap(), alpha_memory),
+    }
 }
 
 fn build_or_share_negative_node(
@@ -874,7 +976,11 @@ fn build_or_share_negative_node(
         }
     }
 
-    let new = NegativeNode::new(parent, alpha_memory, tests).to_node_cell();
+    let mut new = NegativeNode::new(parent, alpha_memory, tests);
+
+    new.nearest_ancestor = find_ancestor_with_same_amem(parent, alpha_memory);
+
+    let new = new.to_node_cell();
 
     println!("Built {}", new.borrow());
     {
@@ -884,6 +990,12 @@ fn build_or_share_negative_node(
     parent.borrow_mut().add_child(&new);
 
     update_new_node_with_matches_from_above(&new);
+
+    // The right unlink procedure checks whether the node has any items
+    new.borrow().right_unlink();
+    if let Node::Negative(ref mut neg) = *new.borrow_mut() {
+        neg.right_linked = false;
+    }
 
     new
 }
@@ -912,7 +1024,7 @@ fn join_test(tests: &[JoinTest], token: &RcCell<Token>, wme: &Wme) -> bool {
 
         // If there is no WME on the token, it represents a negative node on the token
         // which should return false since the args are not equal??
-        let Some(wme2) = &parent.wme() else { return false; }; // TODO figure out if this is correct
+        let Some(wme2) = &parent.wme() else { return false; };
 
         let wme2 = wme2.borrow();
         println!("Comparing WME {:?} from token {}", wme2.fields, parent.id());

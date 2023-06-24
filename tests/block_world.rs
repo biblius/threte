@@ -110,17 +110,34 @@ fn add_productions_and_wmes_then_remove() {
     let mut rete = Rete::default();
 
     let prod_id1 = rete.add_production(production_one);
+    rete.print_to_file("add_productions_and_wmes_then_remove/10_first_prod.txt")
+        .unwrap();
+
     let prod_id2 = rete.add_production(production_two);
+    rete.print_to_file("add_productions_and_wmes_then_remove/11_second_prod.txt")
+        .unwrap();
 
     let id1 = rete.add_wme([B1, ON, B2]);
+    rete.print_to_file("add_productions_and_wmes_then_remove/12_add_first_wme.txt")
+        .unwrap();
     let id2 = rete.add_wme([B2, LEFT_OF, B3]);
+    rete.print_to_file("add_productions_and_wmes_then_remove/13_add_second_wme.txt")
+        .unwrap();
     let id3 = rete.add_wme([B3, COLOR, RED]);
+    rete.print_to_file("add_productions_and_wmes_then_remove/14_add_third_wme.txt")
+        .unwrap();
     let id4 = rete.add_wme([B2, ON, B3]);
+    rete.print_to_file("add_productions_and_wmes_then_remove/15_add_fourth_wme.txt")
+        .unwrap();
     let id5 = rete.add_wme([B3, LEFT_OF, B4]);
+    rete.print_to_file("add_productions_and_wmes_then_remove/16_add_fifth_wme.txt")
+        .unwrap();
     let id6 = rete.add_wme([B5, COLOR, MAIZE]);
+    rete.print_to_file("add_productions_and_wmes_then_remove/17_add_sixth_wme.txt")
+        .unwrap();
     let id7 = rete.add_wme([B6, COLOR, BLUE]);
 
-    rete.print_to_file("add_productions_and_wmes_then_remove/0_initial.txt")
+    rete.print_to_file("add_productions_and_wmes_then_remove/18_add_all_wmes.txt")
         .unwrap();
 
     rete.remove_wme(id1);
@@ -131,16 +148,17 @@ fn add_productions_and_wmes_then_remove() {
     rete.remove_wme(id6);
     rete.remove_wme(id7);
 
-    rete.print_to_file("add_productions_and_wmes_then_remove/1_wmes_removed.txt")
+    rete.print_to_file("add_productions_and_wmes_then_remove/19_remove_all_wmes.txt")
         .unwrap();
 
-    println!("{}", rete.dummy_top_node.borrow().children().len());
-    println!("{}", rete.dummy_top_token.borrow().children().len());
     assert!(rete.working_memory.is_empty());
     assert_eq!(rete.dummy_top_token.borrow().children().len(), 1);
 
     rete.remove_production(prod_id1);
     rete.remove_production(prod_id2);
+
+    rete.print_to_file("add_productions_and_wmes_then_remove/20_remove_all_prods.txt")
+        .unwrap();
 
     assert!(rete.productions.is_empty());
     assert!(rete.dummy_top_node.borrow().children().is_empty());
@@ -162,6 +180,7 @@ fn add_wme_then_prod() {
     let mut rete = Rete::default();
 
     rete.add_wme([B1, ON, B2]);
+
     rete.add_wme([B2, LEFT_OF, B3]);
     rete.add_wme([B3, COLOR, RED]);
     rete.add_wme([B2, ON, B3]);
