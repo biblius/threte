@@ -91,7 +91,7 @@ impl Node {
         match self {
             Node::Beta(ref mut beta) => {
                 println!(
-                    "add_child - Adding child {} - {} to Beta Node {}",
+                    "👶 Adding child {}({}) to Beta Node {}",
                     node.borrow()._type(),
                     node.borrow().id(),
                     beta.id
@@ -100,7 +100,7 @@ impl Node {
             }
             Node::Join(ref mut join) => {
                 println!(
-                    "add_child - Adding child {} - {} to Join Node {}",
+                    "👶 Adding child {}({}) to Join Node {}",
                     node.borrow()._type(),
                     node.borrow().id(),
                     join.id
@@ -109,7 +109,7 @@ impl Node {
             }
             Node::Negative(ref mut negative) => {
                 println!(
-                    "add_child - Adding child {} - {} to Join Node {}",
+                    "👶 Adding child {}({}) to Negative Node {}",
                     node.borrow()._type(),
                     node.borrow().id(),
                     negative.id
@@ -118,7 +118,7 @@ impl Node {
             }
             Node::Ncc(ref mut ncc) => {
                 println!(
-                    "add_child - Adding child {} - {} to Join Node {}",
+                    "👶 Adding child {}({}) to NCC Node {}",
                     node.borrow()._type(),
                     node.borrow().id(),
                     ncc.id
@@ -134,22 +134,19 @@ impl Node {
     pub fn remove_child(&mut self, id: usize) {
         match self {
             Node::Beta(beta) => {
-                println!("remove_child - Removing {} from Beta Node {}", id, beta.id);
+                println!("❌ Removing {} from Beta Node {}", id, beta.id);
                 beta.children.retain(|child| child.borrow().id() != id)
             }
             Node::Join(join) => {
-                println!("remove_child - Removing {} from Join Node {}", id, join.id);
+                println!("❌ Removing {} from Join Node {}", id, join.id);
                 join.children.retain(|child| child.borrow().id() != id)
             }
             Node::Negative(negative) => {
-                println!(
-                    "remove_child - Removing {} from Negative Node {}",
-                    id, negative.id
-                );
+                println!("❌ Removing {} from Negative Node {}", id, negative.id);
                 negative.children.retain(|child| child.borrow().id() != id)
             }
             Node::Ncc(ncc) => {
-                println!("remove_child - Removing {} from NCC Node {}", id, ncc.id);
+                println!("❌ Removing {} from NCC Node {}", id, ncc.id);
                 ncc.children.retain(|child| child.borrow().id() != id)
             }
             Node::Production(_) => unreachable!("Production Node cannot have children"),
@@ -183,11 +180,19 @@ impl Node {
                         }
                         match &mut *child.borrow_mut() {
                             Node::Join(node) => {
-                                println!("💥 Right unlinking {}", node.id);
+                                println!(
+                                    "💥 Right unlinking {} from {}",
+                                    node.id,
+                                    node.alpha_mem.borrow().id
+                                );
                                 node.right_linked = false;
                             }
                             Node::Negative(node) => {
-                                println!("💥 Right unlinking {}", node.id);
+                                println!(
+                                    "💥 Right unlinking {} from {}",
+                                    node.id,
+                                    node.alpha_mem.borrow().id
+                                );
                                 node.right_linked = false;
                             }
                             _ => {}
@@ -218,6 +223,7 @@ impl Node {
                     join.id,
                     join.alpha_mem.borrow().id
                 );
+
                 let mut ancestor = join.nearest_ancestor.clone();
                 while let Some(anc) = ancestor.clone() {
                     let anc = anc.borrow();
@@ -227,10 +233,12 @@ impl Node {
                     }
                     break;
                 }
+
                 println!(
                     "Found nearest ancestor with same alpha mem: {:?}",
                     ancestor.as_ref().map(|a| a.borrow().id())
                 );
+
                 // We have to maintain the ordering of the ancestor, i.e. we always
                 // need to make sure descendants get activated before ancestors. We
                 // know the current node is a descendant and must be activated before its
@@ -254,7 +262,7 @@ impl Node {
                     join.alpha_mem
                         .borrow_mut()
                         .successors
-                        .push_back(Rc::clone(node))
+                        .push_front(Rc::clone(node))
                 }
             }
             Node::Negative(negative) => {
@@ -283,7 +291,7 @@ impl Node {
                         .alpha_mem
                         .borrow_mut()
                         .successors
-                        .push_back(Rc::clone(node))
+                        .push_front(Rc::clone(node))
                 }
             }
             _ => {}

@@ -11,15 +11,9 @@ use item::{Condition, ConstantTest, JoinTest, NegativeJoinResult, Production, To
 use node::{AlphaMemoryNode, NegativeNode, Node};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+type RcCell<T> = Rc<RefCell<T>>;
 pub type ReteNode = RcCell<Node>;
 pub type ReteToken = RcCell<Token>;
-
-#[derive(Debug)]
-pub enum Error {
-    CondToConstantTest,
-}
-
-type RcCell<T> = Rc<RefCell<T>>;
 
 trait IntoCell: Sized {
     fn to_cell(self) -> RcCell<Self> {
@@ -34,7 +28,7 @@ trait IntoNodeCell: Sized {
 #[derive(Debug)]
 pub struct Rete {
     /// Token tree root
-    pub dummy_top_token: RcCell<Token>,
+    pub dummy_top_token: ReteToken,
 
     /// Beta network root
     pub dummy_top_node: ReteNode,
@@ -62,8 +56,7 @@ impl Default for Rete {
 impl Rete {
     fn new() -> Self {
         let dummy_top_node = BetaMemoryNode::dummy();
-
-        let dummy_top_token = Token::new_dummy(&dummy_top_node);
+        let dummy_top_token = Token::dummy(&dummy_top_node);
 
         dummy_top_node.borrow_mut().add_token(&dummy_top_token);
 
@@ -317,7 +310,7 @@ impl Rete {
 
         println!("Searching for matching WMEs for {constant_test:?}");
 
-        for (_, wme) in self.working_memory.iter() {
+        for wme in self.working_memory.values() {
             let _wme = wme.borrow();
             if constant_test.matches(&_wme) {
                 println!("Found match: {_wme} for constant test {constant_test:?}");
@@ -325,9 +318,9 @@ impl Rete {
                     .wme_alphas
                     .entry(_wme.id)
                     .or_insert_with(|| vec![Rc::clone(&am)]);
-                a_mems
-                    .iter()
-                    .for_each(|mem| activate_alpha_memory(mem, wme))
+                for mem in a_mems.iter() {
+                    activate_alpha_memory(mem, wme)
+                }
             }
         }
 
@@ -348,18 +341,18 @@ impl Rete {
                 right_linked: bool,
                 alpha_mem: RcCell<AlphaMemoryNode>,
             },
-            Beta(Vec<RcCell<Token>>),
+            Beta(Vec<ReteToken>),
             Negative {
                 right_linked: bool,
                 alpha_mem: RcCell<AlphaMemoryNode>,
-                tokens: Vec<RcCell<Token>>,
+                tokens: Vec<ReteToken>,
             },
             Ncc {
                 partner: ReteNode,
-                ncc_tokens: Vec<RcCell<Token>>,
+                ncc_tokens: Vec<ReteToken>,
             },
             NccPartner {
-                ncc_partner_tokens: Vec<RcCell<Token>>,
+                ncc_partner_tokens: Vec<ReteToken>,
             },
             Production,
         }
@@ -516,25 +509,25 @@ fn update_new_node_with_matches_from_above(node: &ReteNode) {
     // This avoids keeping the mutable borrow when recursively right activating the join node
     let children = match *parent.borrow_mut() {
         Node::Beta(ref beta) => {
-            beta.items.iter().for_each(|token| {
+            for token in beta.items.iter() {
                 activate_left(node, token, None);
-            });
+            }
             return;
         }
         Node::Negative(ref mut negative) => {
-            negative.items.iter().for_each(|token| {
+            for token in negative.items.iter() {
                 if !token.borrow().contains_join_results() {
                     activate_left(node, token, None);
                 }
-            });
+            }
             return;
         }
         Node::Ncc(ref mut ncc) => {
-            ncc.items.iter().for_each(|token| {
+            for token in ncc.items.iter() {
                 if !token.borrow().contains_ncc_results() {
                     activate_left(node, token, None);
                 }
-            });
+            }
             return;
         }
         Node::Join(ref mut join) => std::mem::replace(&mut join.children, vec![Rc::clone(node)]),
@@ -600,7 +593,7 @@ fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, wme: &RcCell<
 /// when new [WME][Wme]s enter the network.
 fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
     println!(
-        "➡️ Right activating {} {}",
+        "➡️  Right activating {} {}",
         node.borrow()._type(),
         node.borrow().id()
     );
@@ -622,7 +615,11 @@ fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
             l_link = true;
             // Subsequently if the beta is empty, we need to right unlink the node
             if join.parent.borrow().tokens().is_empty() {
-                println!("💥 Right unlinking {}", join.id);
+                println!(
+                    "💥 Right unlinking {} from {}",
+                    join.id,
+                    join.alpha_mem.borrow().id
+                );
                 join.alpha_mem
                     .borrow_mut()
                     .successors
@@ -642,9 +639,9 @@ fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
             if let Node::Beta(ref parent) = *join_node.parent.borrow() {
                 for token in parent.items.iter() {
                     if join_test(&join_node.tests, token, &wme.borrow()) {
-                        join_node.children.iter().for_each(|child| {
+                        for child in join_node.children.iter() {
                             activate_left(child, token, Some(wme));
-                        })
+                        }
                     }
                 }
             }
@@ -692,7 +689,7 @@ fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
 /// the node being activated should remain in the children list of the caller. If the function returns `false`
 /// the node should be removed from the list. Consequently, whenever a memory node has to activate its children
 /// it does so through a `retain` call.
-fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcCell<Wme>>) -> bool {
+fn activate_left(node: &ReteNode, parent_token: &ReteToken, wme: Option<&RcCell<Wme>>) -> bool {
     // Relink the appropriate nodes to their corresponding alpha mems if they are unlinked
     if !node.borrow().is_right_linked() && matches!(&*node.borrow(), Node::Join(_)) {
         Node::relink_to_alpha_mem(node);
@@ -717,7 +714,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
 
     match &mut *node.borrow_mut() {
         Node::Beta(ref mut beta_node) => {
-            println!("⬅️ Left activating beta {}", beta_node.id,);
+            println!("⬅️  Left activating beta {}", beta_node.id,);
 
             let new_token = Token::new_beta(node, parent_token, wme);
 
@@ -730,7 +727,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
             true
         }
         Node::Join(ref mut join_node) => {
-            println!("⬅️ Left activating join {}", join_node.id);
+            println!("⬅️  Left activating join {}", join_node.id);
 
             for item in join_node.alpha_mem.borrow().items.iter() {
                 if join_test(&join_node.tests, parent_token, &item.borrow().wme.borrow()) {
@@ -746,7 +743,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
             let new_token = Token::new_negative(node, parent_token, wme);
 
             println!(
-                "⬅️ Left activating negative {} and appending token {}",
+                "⬅️  Left activating negative {} and appending token {}",
                 negative_node.id,
                 new_token.borrow().id()
             );
@@ -782,7 +779,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
             true
         }
         Node::Ncc(ncc_node) => {
-            println!("⬅️ Left activating ncc {}", ncc_node.id,);
+            println!("⬅️  Left activating ncc {}", ncc_node.id,);
             let new_token = Token::new_ncc(node, parent_token, wme);
 
             ncc_node.items.push(Rc::clone(&new_token));
@@ -811,8 +808,8 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
         }
         Node::NccPartner(ncc_partner) => {
             println!(
-                "⬅️ Left activating ncc partner {} with parent token {}",
-                ncc_partner,
+                "⬅️  Left activating ncc partner {} with parent token {}",
+                ncc_partner.id,
                 parent_token.borrow()
             );
             let ncc_node = &ncc_partner.ncc_node;
@@ -935,14 +932,22 @@ fn build_or_share_join_node(
             .successors
             .retain(|suc| suc.borrow().id() != new.borrow().id());
         if let Node::Join(join) = &mut *new.borrow_mut() {
-            println!("💥 Right unlinking {}", join.id);
+            println!(
+                "💥 Right unlinking join {} from {}",
+                join.id,
+                alpha_memory.borrow().id
+            );
             join.right_linked = false;
         }
         // Left unlink if the parent alpha memory is empty
     } else if alpha_memory.borrow().items.is_empty() {
         parent.borrow_mut().remove_child(new.borrow().id());
         if let Node::Join(join) = &mut *new.borrow_mut() {
-            println!("💥 Left unlinking {}", join.id);
+            println!(
+                "💥 Left unlinking join {} from {}",
+                join.id,
+                parent.borrow()
+            );
             join.left_linked = false;
         }
     }
@@ -1015,7 +1020,7 @@ fn build_or_share_negative_node(
 /// Perform variable binding consistency tests for each test in `tests` with the given `token` and `wme`.
 ///
 /// [Join tests][JoinTest] are stored by join and negative nodes and are executed whenever those node are activated.
-fn join_test(tests: &[JoinTest], token: &RcCell<Token>, wme: &Wme) -> bool {
+fn join_test(tests: &[JoinTest], token: &ReteToken, wme: &Wme) -> bool {
     println!(
         "Performing join tests on {tests:?} with WME {} {:?} and token {}",
         wme.id,
@@ -1206,7 +1211,7 @@ mod tests {
 
         let node = beta.to_node_cell();
 
-        let daddy = Token::new_dummy(&node);
+        let daddy = Token::dummy(&node);
 
         let child_token_one = Token::new_beta(&node, &daddy, Some(&wme));
 

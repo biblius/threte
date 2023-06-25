@@ -44,7 +44,8 @@ impl Wme {
     }
 
     #[rustfmt::skip]
-    pub fn permutations(&self) -> impl Iterator<Item = ConstantTest> {
+    #[inline]
+    pub fn permutations(&self) -> [ConstantTest; 8] {
         [
             ConstantTest([Some(self[0]), Some(self[1]), Some(self[2])]),
             ConstantTest([Some(self[0]), Some(self[1]), None]),
@@ -55,7 +56,6 @@ impl Wme {
             ConstantTest([None,          None,          Some(self[2])]),
             ConstantTest([None,          None,          None]),
         ]
-        .into_iter()
     }
 }
 
@@ -245,7 +245,7 @@ impl Token {
     }
 
     /// Used when instantiating the network
-    pub fn new_dummy(dummy_top_node: &ReteNode) -> RcCell<Self> {
+    pub fn dummy(dummy_top_node: &ReteNode) -> RcCell<Self> {
         Self::Dummy {
             id: DUMMY_TOKEN_ID,
             node: Rc::clone(dummy_top_node),
@@ -657,6 +657,7 @@ impl ConstantTest {
     }
 }
 
+#[inline]
 pub fn conditions_to_constant_tests(acc: &mut Vec<ConstantTest>, conditions: &[Condition]) {
     for condition in conditions {
         match condition {
