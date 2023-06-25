@@ -1,15 +1,13 @@
 use crate::{
     activate_left,
     id::{item_id, token_id, wme_id},
-    node::{AlphaMemoryNode, Node, ReteNode},
-    IntoCell, RcCell,
+    node::{AlphaMemoryNode, Node},
+    IntoCell, RcCell, ReteNode, ReteToken,
 };
 use std::ops::Index;
 use std::{hash::Hash, rc::Rc};
 
 pub const DUMMY_TOKEN_ID: usize = usize::MIN;
-
-pub type ReteToken = RcCell<Token>;
 
 /// A WME represents a piece of state in the system.
 ///
@@ -627,7 +625,7 @@ impl IntoCell for AlphaMemoryItem {}
 /// Specifies the locations of the two fields whose values must be
 /// equal in order for some variable to be bound consistently.
 ///
-/// These are stored by beta nodes and are used to perform join tests.
+/// These are stored by join and negative nodes and are used to perform join tests.
 #[derive(Debug, Eq, PartialEq)]
 pub struct JoinTest {
     /// An index that ultimately indexes into a WME from the Alpha memory connected

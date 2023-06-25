@@ -1,11 +1,9 @@
 use crate::{
     id::{alpha_node_id, beta_node_id},
-    item::{AlphaMemoryItem, JoinTest, Production, Token},
-    IntoCell, IntoNodeCell, RcCell,
+    item::{AlphaMemoryItem, JoinTest, Production},
+    IntoCell, IntoNodeCell, RcCell, ReteNode, ReteToken,
 };
-use std::rc::Rc;
-
-pub type ReteNode = RcCell<Node>;
+use std::{collections::VecDeque, rc::Rc};
 
 pub const DUMMY_NODE_ID: usize = usize::MIN;
 
@@ -67,7 +65,7 @@ impl Node {
     }
 
     #[inline]
-    pub fn tokens(&self) -> &[RcCell<Token>] {
+    pub fn tokens(&self) -> &[ReteToken] {
         match self {
             Node::Beta(node) => &node.items,
             Node::Negative(node) => &node.items,
@@ -253,7 +251,10 @@ impl Node {
                         .successors
                         .insert(index + 1, Rc::clone(node))
                 } else {
-                    join.alpha_mem.borrow_mut().successors.push(Rc::clone(node))
+                    join.alpha_mem
+                        .borrow_mut()
+                        .successors
+                        .push_back(Rc::clone(node))
                 }
             }
             Node::Negative(negative) => {
@@ -282,7 +283,7 @@ impl Node {
                         .alpha_mem
                         .borrow_mut()
                         .successors
-                        .push(Rc::clone(node))
+                        .push_back(Rc::clone(node))
                 }
             }
             _ => {}
@@ -296,7 +297,8 @@ impl Node {
     }
 
     #[inline]
-    pub fn add_token(&mut self, token: &RcCell<Token>) {
+    pub fn add_token(&mut self, token: &ReteToken) {
+        println!("Node {} adding token {}", self.id(), token.borrow());
         match self {
             Node::Beta(beta) => beta.items.push(Rc::clone(token)),
             Node::Negative(negative) => negative.items.push(Rc::clone(token)),
@@ -320,7 +322,6 @@ impl Node {
     pub fn is_left_linked(&self) -> bool {
         match self {
             Node::Join(node) => node.left_linked,
-            Node::Negative(node) => node.right_linked,
             _ => true,
         }
     }
@@ -359,7 +360,7 @@ impl Node {
 pub struct AlphaMemoryNode {
     pub id: usize,
     pub items: Vec<RcCell<AlphaMemoryItem>>,
-    pub successors: Vec<ReteNode>,
+    pub successors: VecDeque<ReteNode>,
 }
 
 impl AlphaMemoryNode {
@@ -367,7 +368,7 @@ impl AlphaMemoryNode {
         let am = Self {
             id: alpha_node_id(),
             items: vec![],
-            successors: vec![],
+            successors: VecDeque::new(),
         };
         println!("Created Alpha Memory: {am}");
         am
@@ -387,7 +388,7 @@ pub struct BetaMemoryNode {
     pub id: usize,
     pub parent: Option<ReteNode>,
     pub children: Vec<ReteNode>,
-    pub items: Vec<RcCell<Token>>,
+    pub items: Vec<ReteToken>,
     pub all_children: Vec<ReteNode>,
 }
 
@@ -422,6 +423,7 @@ pub struct JoinNode {
     pub alpha_mem: RcCell<AlphaMemoryNode>,
     pub children: Vec<ReteNode>,
     pub tests: Vec<JoinTest>,
+
     /// Indicates the nearest ancestor node with the same
     /// alpha memory as this one. Used for relinking.
     pub nearest_ancestor: Option<ReteNode>,
@@ -457,7 +459,7 @@ pub struct NegativeNode {
     pub id: usize,
     pub parent: ReteNode,
     pub children: Vec<ReteNode>,
-    pub items: Vec<RcCell<Token>>,
+    pub items: Vec<ReteToken>,
     pub alpha_mem: RcCell<AlphaMemoryNode>,
     pub tests: Vec<JoinTest>,
     pub nearest_ancestor: Option<ReteNode>,
@@ -499,10 +501,10 @@ pub struct NccNode {
     pub id: usize,
     pub parent: ReteNode,
     pub children: Vec<ReteNode>,
-    pub items: Vec<RcCell<Token>>,
+    pub items: Vec<ReteToken>,
 
     /// This field is an option solely because we cannot construct an ncc node and its
-    /// partner simultaneously so we need some kind of way to instantiate one without the other. (in safe code)
+    /// partner simultaneously so we need some kind of way to instantiate one without the other (in safe code).
     ///
     /// This will never be None while the node is alive in the network.
     pub partner: Option<ReteNode>,
@@ -526,7 +528,7 @@ pub struct NccPartnerNode {
     pub parent: ReteNode,
     pub number_of_conjucts: usize,
     pub ncc_node: ReteNode,
-    pub new_results: Vec<RcCell<Token>>,
+    pub new_results: Vec<ReteToken>,
 }
 
 impl NccPartnerNode {

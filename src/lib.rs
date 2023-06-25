@@ -8,8 +8,11 @@ use crate::{
     node::{BetaMemoryNode, JoinNode, NccNode, NccPartnerNode, ProductionNode},
 };
 use item::{Condition, ConstantTest, JoinTest, NegativeJoinResult, Production, Token, Wme};
-use node::{AlphaMemoryNode, NegativeNode, Node, ReteNode};
+use node::{AlphaMemoryNode, NegativeNode, Node};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+pub type ReteNode = RcCell<Node>;
+pub type ReteToken = RcCell<Token>;
 
 #[derive(Debug)]
 pub enum Error {
@@ -574,27 +577,27 @@ fn activate_alpha_memory(alpha_mem_node: &RcCell<AlphaMemoryNode>, wme: &RcCell<
     };
 
     // As successors are added to alpha memories, they will be descendents of previous
-    // join nodes. In order to mitigate token duplication, desdendents must be right activated
-    // before ancestors
+    // join nodes. In order to mitigate token duplication, descendents must be right activated
+    // before ancestors.
     for successor in successors.into_iter().rev() {
         {
             alpha_mem_node
                 .borrow_mut()
                 .successors
-                .push(Rc::clone(&successor));
+                .push_front(Rc::clone(&successor));
         }
         activate_right(&successor, wme);
     }
 }
 
-/// A right activation of a `JoinNode` will cause it to iterate through its
+/// A right activation of a [JoinNode] will cause it to iterate through its
 /// parent's tokens and perform a [join_test] on each one and the given WME.
 ///
 /// For every test that passes, a left activation is triggered on each of the node's
 /// children.
 ///
 /// Right activations are caused by [AlphaMemoryNode]s when [WME][Wme]s are changed or
-/// when new [WME][Wme]s enter the network
+/// when new [WME][Wme]s enter the network.
 fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
     println!(
         "➡️ Right activating {} {}",
@@ -628,6 +631,7 @@ fn activate_right(node: &ReteNode, wme: &RcCell<Wme>) {
             }
         }
     }
+
     if let Node::Join(ref mut join) = *node.borrow_mut() {
         join.left_linked = l_link;
         join.right_linked = r_link;
@@ -735,6 +739,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
                     }
                 }
             }
+
             true
         }
         Node::Negative(negative_node) => {
@@ -773,6 +778,7 @@ fn activate_left(node: &ReteNode, parent_token: &RcCell<Token>, wme: Option<&RcC
                     .children
                     .retain(|child| activate_left(child, &new_token, None));
             }
+
             true
         }
         Node::Ncc(ncc_node) => {
@@ -916,7 +922,10 @@ fn build_or_share_join_node(
     }
 
     // Add the newly created node to the alpha memory successors
-    alpha_memory.borrow_mut().successors.push(Rc::clone(&new));
+    alpha_memory
+        .borrow_mut()
+        .successors
+        .push_back(Rc::clone(&new));
 
     // Right unlink if the parent beta memory is empty
     let parent = new.borrow().parent().unwrap();
@@ -984,7 +993,10 @@ fn build_or_share_negative_node(
 
     println!("Built {}", new.borrow());
     {
-        alpha_memory.borrow_mut().successors.push(Rc::clone(&new));
+        alpha_memory
+            .borrow_mut()
+            .successors
+            .push_back(Rc::clone(&new));
     }
 
     parent.borrow_mut().add_child(&new);

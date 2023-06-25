@@ -5,9 +5,9 @@ use crate::{
     },
     node::{
         AlphaMemoryNode, BetaMemoryNode, JoinNode, NccNode, NccPartnerNode, NegativeNode, Node,
-        ProductionNode, ReteNode, DUMMY_NODE_ID,
+        ProductionNode, DUMMY_NODE_ID,
     },
-    RcCell, Rete,
+    RcCell, Rete, ReteNode, ReteToken,
 };
 use std::{
     collections::HashMap,
@@ -514,7 +514,7 @@ fn write_beta_network(buf: &mut String, node: &ReteNode) {
     }
 }
 
-fn write_tokens(buf: &mut String, token: &RcCell<Token>) {
+fn write_tokens(buf: &mut String, token: &ReteToken) {
     let count = Rc::strong_count(token);
     let tok = token.borrow();
     writeln!(
