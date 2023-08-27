@@ -1,4 +1,4 @@
-use crate::{
+use super::{
     id::{alpha_node_id, beta_node_id},
     item::{AlphaMemoryItem, JoinTest, Production},
     IntoCell, IntoNodeCell, RcCell, ReteNode, ReteToken,

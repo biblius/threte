@@ -1,14 +1,18 @@
 # Threte
 
-Implementation of the Rete algorithm in rust.
+A [rule engine](https://en.wikipedia.org/wiki/Business_rules_engine#:~:text=Rules%20engines%20or%20inference%20engines,the%20need%20for%20IT%20intervention.) implementation in R*st.
+
+The engine consists of a production queue and a pattern matcher implemented using the [Rete algorithm](https://en.wikipedia.org/wiki/Rete_algorithm).
 
 The Rete implementation closely follows [this amazing paper](http://reports-archive.adm.cs.cmu.edu/anon/1995/CMU-CS-95-113.pdf).
 
 ## Todo
 
 - Rete
+  - [ ] Change the mechanism with which children are removed (try indexmap instead of Vec::retain as the latter can waste work)
   - [x] Network (Alpha, Beta, Join, Negative, NCC nodes)
   - [x] Node Unlinking
+  - [ ] Non-equality join tests
   - [ ] In place WME modification
   - [ ] Lazy matching
   - [ ] Flavor of rete with collection oriented match (use trait to represent wme?)
@@ -23,9 +27,9 @@ The Rete implementation closely follows [this amazing paper](http://reports-arch
   - [ ] Simple Rete Visualiser
   - [ ] Examples
 
-The long term goal is to create a working rule engine with the ability to create a machine that 'learns'.
+The implementation is far from production ready and can be improved in many ways.
 
-An important sanity note on negative and NCC nodes:
+## An important sanity note on negative and NCC nodes
 
 "The function for creating new negative nodes is similar to the ones for creating beta memories
 and join nodes. However, one additional consideration is important with negative conditions,

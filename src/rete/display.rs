@@ -1,4 +1,4 @@
-use crate::{
+use super::{
     item::{
         AlphaMemoryItem, Condition, ConstantTest, NegativeJoinResult, Production, Token, TokenBase,
         Wme,
@@ -116,8 +116,8 @@ impl Display for Condition {
                 for (i, t) in test.iter().enumerate() {
                     let delim = if i == 2 { "" } else { "-" };
                     match t {
-                        crate::item::ConditionTest::Constant(id) => write!(buf, "C({id}){delim}")?,
-                        crate::item::ConditionTest::Variable(id) => write!(buf, "V({id}){delim}")?,
+                        super::item::ConditionTest::Constant(id) => write!(buf, "C({id}){delim}")?,
+                        super::item::ConditionTest::Variable(id) => write!(buf, "V({id}){delim}")?,
                     }
                 }
                 write!(buf, "], ")?;
@@ -127,8 +127,8 @@ impl Display for Condition {
                 for (i, t) in test.iter().enumerate() {
                     let delim = if i == 2 { "" } else { "-" };
                     match t {
-                        crate::item::ConditionTest::Constant(id) => write!(buf, "C({id}){delim}")?,
-                        crate::item::ConditionTest::Variable(id) => write!(buf, "V({id}){delim}")?,
+                        super::item::ConditionTest::Constant(id) => write!(buf, "C({id}){delim}")?,
+                        super::item::ConditionTest::Variable(id) => write!(buf, "V({id}){delim}")?,
                     }
                 }
                 write!(buf, "], ")?;

@@ -1,11 +1,11 @@
-use crate::{
+use super::{
     activate_left,
-    id::{item_id, token_id, wme_id},
+    id::{item_id, prod_id, token_id, wme_id},
     node::{AlphaMemoryNode, Node},
     IntoCell, RcCell, ReteNode, ReteToken,
 };
-use std::ops::Index;
 use std::{hash::Hash, rc::Rc};
+use std::{ops::Index, sync::mpsc::Sender};
 
 pub const DUMMY_TOKEN_ID: usize = usize::MIN;
 
@@ -16,14 +16,23 @@ pub const DUMMY_TOKEN_ID: usize = usize::MIN;
 /// to store a pointer to the memories on the actual WME.
 #[derive(Debug)]
 pub struct Wme {
-    pub id: usize,
+    /// The ID solely used internally by the Rete. Not relevant to the
+    /// system utilising the rete.
+    ///
+    /// The system is usually concerned with the ID from the WME's [fields][Wme::fields].
+    pub(in crate::rete) id: usize,
 
-    /// Represents [id, attribute, value]
+    /// Represents an \[ID, ATTRIBUTE, VALUE] triple.
+    ///
+    /// The external system using the Rete assigns these in a system specific way.
+    /// The `ID` element of the fields is the rete identifier for a piece of
+    /// system state.
     pub fields: [usize; 3],
 
     /// Tokens which contain this WME as their element
     pub tokens: Vec<ReteToken>,
 
+    /// A list of negative join results that succeeded on this WME.
     pub negative_join_results: Vec<RcCell<NegativeJoinResult>>,
 }
 
@@ -348,25 +357,33 @@ impl Token {
 
     #[inline]
     pub fn set_owner(&mut self, new_owner: &ReteToken) {
-        let Token::NCC { ref mut owner, .. } = self else {panic!("Token cannot contain owner")};
+        let Token::NCC { ref mut owner, .. } = self else {
+            panic!("Token cannot contain owner")
+        };
         *owner = Some(Rc::clone(new_owner))
     }
 
     #[inline]
     /// Returns true if the token is a `Negative` token and its `join_results` are not empty
     pub fn contains_join_results(&self) -> bool {
-        let Token::Negative {  join_results, .. } = self else { return false };
+        let Token::Negative { join_results, .. } = self else {
+            return false;
+        };
         !join_results.is_empty()
     }
 
     pub fn add_join_result(&mut self, result: &RcCell<NegativeJoinResult>) {
-        let Token::Negative {  join_results, .. } = self else { panic!("Token cannot contain negative result") };
+        let Token::Negative { join_results, .. } = self else {
+            panic!("Token cannot contain negative result")
+        };
         join_results.push(Rc::clone(result))
     }
 
     #[inline]
     pub fn remove_join_result(&mut self, id: usize) -> bool {
-        let Token::Negative {  join_results, .. } = self else { panic!("Token cannot contain negative result") };
+        let Token::Negative { join_results, .. } = self else {
+            panic!("Token cannot contain negative result")
+        };
         join_results.retain(|res| res.borrow().id != id);
         join_results.is_empty()
     }
@@ -374,13 +391,17 @@ impl Token {
     #[inline]
     /// Returns true if the token is an `NCC` token and its `ncc_results` are not empty
     pub fn contains_ncc_results(&self) -> bool {
-        let Token::NCC {  ncc_results, .. } = self else { return false };
+        let Token::NCC { ncc_results, .. } = self else {
+            return false;
+        };
         !ncc_results.is_empty()
     }
 
     #[inline]
     pub fn add_ncc_result(&mut self, token: &ReteToken) {
-        let Token::NCC {  ncc_results, .. } = self else { panic!("Token cannot contain NCC result") };
+        let Token::NCC { ncc_results, .. } = self else {
+            panic!("Token cannot contain NCC result")
+        };
         ncc_results.push(Rc::clone(token))
     }
 
@@ -388,7 +409,9 @@ impl Token {
     /// it contains no more ncc results after the removal.
     #[inline]
     pub fn remove_ncc_result(&mut self, id: usize) -> bool {
-        let Token::NCC {  ncc_results, .. } = self else { return false; };
+        let Token::NCC { ncc_results, .. } = self else {
+            return false;
+        };
         ncc_results.retain(|res| res.borrow().id() != id);
         ncc_results.is_empty()
     }
@@ -427,10 +450,7 @@ impl Token {
             join_results,
             ncc_results,
             owner,
-        } = {
-            let mut tok = token.borrow_mut();
-            Token::destructure(&mut tok)
-        };
+        } = Token::destructure(&mut token.borrow_mut());
 
         println!("Deleting descendants of token {id}");
 
@@ -708,7 +728,23 @@ impl From<ConditionTest> for Option<usize> {
 #[derive(Debug)]
 pub struct Production {
     pub id: usize,
+
+    /// Conditions required to be fully matched in order for this production to fire.
     pub conditions: Vec<Condition>,
+
+    /// When a production is activated, the overlying system is notified via the receiving
+    /// side of this channel
+    pub activation_channel: Sender<usize>,
+}
+
+impl Production {
+    pub fn new(conditions: &[Condition], activation_tx: Sender<usize>) -> Self {
+        Self {
+            id: prod_id(),
+            conditions: conditions.to_vec(),
+            activation_channel: activation_tx,
+        }
+    }
 }
 
 /// A test for a single symbol.
@@ -743,6 +779,7 @@ impl Condition {
 
     /// Returns an iterator over only the variable test, along with
     /// their indices.
+    #[inline]
     pub fn variables(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         match self {
             Condition::Positive { test } | Condition::Negative { test } => {

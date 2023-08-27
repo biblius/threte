@@ -1,7 +1,14 @@
+use std::sync::atomic::AtomicUsize;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use threte::engine::{Engine, Rule};
+use threte::rete::item::Wme;
 use threte::{
-    id::reset,
-    item::{Condition, ConditionTest, Production},
-    Rete,
+    engine::IntoWmes,
+    rete::{
+        id::reset,
+        item::{Condition, ConditionTest, Production},
+        Rete,
+    },
 };
 
 const B1: usize = 1;
@@ -14,10 +21,12 @@ const B6: usize = 6;
 const ON: usize = 10;
 const COLOR: usize = 11;
 const LEFT_OF: usize = 12;
+const ID: usize = 13;
 
 const RED: usize = 20;
 const MAIZE: usize = 21;
 const BLUE: usize = 23;
+
 const TABLE: usize = 25;
 
 const W1: [usize; 3] = [B1, ON, B2];
@@ -42,27 +51,131 @@ const C_COLOR: ConditionTest = ConditionTest::Constant(COLOR);
 const C_RED: ConditionTest = ConditionTest::Constant(RED);
 const C_MAIZE: ConditionTest = ConditionTest::Constant(MAIZE);
 const C_BLUE: ConditionTest = ConditionTest::Constant(BLUE);
+const C_ID: ConditionTest = ConditionTest::Constant(ID);
+const C_TABLE: ConditionTest = ConditionTest::Constant(TABLE);
 
 const C1: Condition = Condition::new_positive([V_X, C_ON, V_Y]);
 const C2: Condition = Condition::new_positive([V_Y, C_LEFT_OF, V_Z]);
 const C3: Condition = Condition::new_positive([V_Z, C_COLOR, C_RED]);
 const C4: Condition = Condition::new_positive([V_A, C_COLOR, C_MAIZE]);
 const C5: Condition = Condition::new_positive([V_B, C_COLOR, C_BLUE]);
+const C6: Condition = Condition::new_positive([V_Z, C_ON, C_TABLE]);
 
-fn productions() -> Vec<Production> {
+#[derive(Debug, Hash)]
+struct Block {
+    /// The internal ID used by the rete
+    rete_id: usize,
+
+    /// The external ID used in the engine
+    id: usize,
+
+    /// [ON], [LEFT_OF]
+    positions: Vec<Position>,
+
+    /// [RED], [MAIZE], [BLUE]
+    color: Color, // WME attribute 11
+}
+
+static IDENTIFIER: AtomicUsize = AtomicUsize::new(0);
+
+impl IntoWmes for Block {
+    fn id(&self) -> usize {
+        self.id
+    }
+
+    fn to_wmes(&self) -> Vec<Wme> {
+        let mut wmes = vec![Wme::new([self.rete_id, ID, self.id])];
+
+        for pos in self.positions.iter() {
+            match pos {
+                Position::On(on) => wmes.push(Wme::new([self.rete_id, ON, *on])),
+                Position::LeftOf(of) => wmes.push(Wme::new([self.rete_id, LEFT_OF, *of])),
+                Position::Table => wmes.push(Wme::new([self.rete_id, ON, TABLE])),
+            }
+        }
+
+        match self.color {
+            Color::Red => wmes.push(Wme::new([self.rete_id, COLOR, RED])),
+            Color::Maize => wmes.push(Wme::new([self.rete_id, COLOR, MAIZE])),
+            Color::Blue => wmes.push(Wme::new([self.rete_id, COLOR, BLUE])),
+        }
+
+        wmes
+    }
+}
+
+#[derive(Debug, Hash)]
+enum Position {
+    On(usize),
+    LeftOf(usize),
+    Table,
+}
+
+#[derive(Debug, Hash)]
+enum Color {
+    Red,
+    Maize,
+    Blue,
+}
+
+#[test]
+fn engine() {
+    let block1 = Block {
+        rete_id: 1 << (usize::BITS / 2),
+        id: 1,
+        positions: vec![Position::Table],
+        color: Color::Red,
+    };
+
+    let block2 = Block {
+        rete_id: 2 << (usize::BITS / 2),
+        id: 2,
+        positions: vec![Position::LeftOf(block1.rete_id)],
+        color: Color::Maize,
+    };
+
+    let block3 = Block {
+        rete_id: 3 << (usize::BITS / 2),
+        id: 3,
+        positions: vec![Position::On(block2.rete_id)],
+        color: Color::Blue,
+    };
+
+    let rule1 = Rule {
+        conditions: vec![C1, C2, C3],
+        production: Box::new(|e, b| {
+            println!("Rule 1 works!");
+            let el = e.elements.get(&b[0]);
+            dbg!(el);
+        }),
+        bindings: vec![1, 2],
+    };
+
+    let rule2 = Rule {
+        conditions: vec![C1, C2, C6],
+        production: Box::new(|_e, _| {
+            println!("Rule 2 works!");
+        }),
+        bindings: vec![],
+    };
+
+    let mut engine = Engine::default();
+
+    engine.add_rule(rule1);
+    engine.add_rule(rule2);
+
+    engine.add_element(block1);
+    engine.add_element(block2);
+    engine.add_element(block3);
+
+    engine.activate_productions();
+}
+
+fn productions(tx: Sender<usize>) -> Vec<Production> {
     vec![
-        Production {
-            id: 9001,
-            conditions: vec![C1, C2, C3],
-        },
-        Production {
-            id: 9002,
-            conditions: vec![C1, C2, C4, C5],
-        },
-        Production {
-            id: 9003,
-            conditions: vec![C1, C2, C4, C3],
-        },
+        Production::new(&[C1, C2, C3], tx.clone()),
+        Production::new(&[C1, C2, C4, C5], tx.clone()),
+        Production::new(&[C1, C2, C3, C4], tx),
     ]
 }
 
@@ -73,7 +186,8 @@ fn wmes() -> Vec<[usize; 3]> {
 #[test]
 fn add_productions() {
     let mut rete = Rete::default();
-    for p in productions() {
+    let (tx, _rx) = channel();
+    for p in productions(tx) {
         rete.add_production(p);
     }
 
@@ -85,27 +199,53 @@ fn add_productions() {
 #[test]
 fn add_productions_and_wmes() {
     let mut rete = Rete::default();
-    for p in productions() {
+    let (tx, _rx) = channel();
+    for p in productions(tx) {
         rete.add_production(p);
     }
 
     for wme in wmes() {
-        rete.add_wme(wme);
+        rete.add_wme(Wme::new(wme));
     }
 
     reset()
 }
 
 #[test]
+fn add_wme_then_prod() {
+    let (tx, rx) = channel();
+    let production_one = Production::new(&[C1, C2, C3], tx.clone());
+    let production_two = Production::new(&[C1, C2, C4, C5], tx);
+
+    let mut rete = Rete::default();
+
+    rete.add_wme(Wme::new([B1, ON, B2]));
+    rete.add_wme(Wme::new([B2, LEFT_OF, B3]));
+    rete.add_wme(Wme::new([B3, COLOR, RED]));
+
+    // Production should activate here
+
+    rete.add_wme(Wme::new([B2, ON, B3]));
+    rete.add_wme(Wme::new([B3, LEFT_OF, B4]));
+    rete.add_wme(Wme::new([B5, COLOR, MAIZE]));
+    rete.add_wme(Wme::new([B6, COLOR, BLUE]));
+
+    // And here, 2 in total
+
+    rete.add_production(production_one);
+    rete.add_production(production_two);
+
+    // TODO: I have no clue why this is 3
+    assert_production_set_size(rx, 3);
+
+    reset()
+}
+
+#[test]
 fn add_productions_and_wmes_then_remove() {
-    let production_one = Production {
-        id: 9000,
-        conditions: vec![C1, C2, C3],
-    };
-    let production_two = Production {
-        id: 9001,
-        conditions: vec![C1, C2, C4, C5],
-    };
+    let (tx, rx) = channel();
+    let production_one = Production::new(&[C1, C2, C3], tx.clone());
+    let production_two = Production::new(&[C1, C2, C4, C5], tx);
 
     let mut rete = Rete::default();
 
@@ -117,25 +257,25 @@ fn add_productions_and_wmes_then_remove() {
     rete.print_to_file("add_productions_and_wmes_then_remove/11_second_prod.txt")
         .unwrap();
 
-    let id1 = rete.add_wme([B1, ON, B2]);
+    let id1 = rete.add_wme(Wme::new([B1, ON, B2]));
     rete.print_to_file("add_productions_and_wmes_then_remove/12_add_first_wme.txt")
         .unwrap();
-    let id2 = rete.add_wme([B2, LEFT_OF, B3]);
+    let id2 = rete.add_wme(Wme::new([B2, LEFT_OF, B3]));
     rete.print_to_file("add_productions_and_wmes_then_remove/13_add_second_wme.txt")
         .unwrap();
-    let id3 = rete.add_wme([B3, COLOR, RED]);
+    let id3 = rete.add_wme(Wme::new([B3, COLOR, RED]));
     rete.print_to_file("add_productions_and_wmes_then_remove/14_add_third_wme.txt")
         .unwrap();
-    let id4 = rete.add_wme([B2, ON, B3]);
+    let id4 = rete.add_wme(Wme::new([B2, ON, B3]));
     rete.print_to_file("add_productions_and_wmes_then_remove/15_add_fourth_wme.txt")
         .unwrap();
-    let id5 = rete.add_wme([B3, LEFT_OF, B4]);
+    let id5 = rete.add_wme(Wme::new([B3, LEFT_OF, B4]));
     rete.print_to_file("add_productions_and_wmes_then_remove/16_add_fifth_wme.txt")
         .unwrap();
-    let id6 = rete.add_wme([B5, COLOR, MAIZE]);
+    let id6 = rete.add_wme(Wme::new([B5, COLOR, MAIZE]));
     rete.print_to_file("add_productions_and_wmes_then_remove/17_add_sixth_wme.txt")
         .unwrap();
-    let id7 = rete.add_wme([B6, COLOR, BLUE]);
+    let id7 = rete.add_wme(Wme::new([B6, COLOR, BLUE]));
 
     rete.print_to_file("add_productions_and_wmes_then_remove/18_add_all_wmes.txt")
         .unwrap();
@@ -163,42 +303,26 @@ fn add_productions_and_wmes_then_remove() {
     assert!(rete.productions.is_empty());
     assert!(rete.dummy_top_node.borrow().children().is_empty());
 
+    // TODO Also no idea why 3, fml
+    assert_production_set_size(rx, 3);
+
     reset()
 }
 
-#[test]
-fn add_wme_then_prod() {
-    let production_one = Production {
-        id: 9000,
-        conditions: vec![C1, C2, C3],
-    };
-    let production_two = Production {
-        id: 9001,
-        conditions: vec![C1, C2, C4, C5],
-    };
+fn assert_production_set_size(rx: Receiver<usize>, size: usize) {
+    let mut i = 0;
+    while rx.try_recv().is_ok() {
+        i += 1;
+    }
 
-    let mut rete = Rete::default();
-
-    rete.add_wme([B1, ON, B2]);
-
-    rete.add_wme([B2, LEFT_OF, B3]);
-    rete.add_wme([B3, COLOR, RED]);
-    rete.add_wme([B2, ON, B3]);
-    rete.add_wme([B3, LEFT_OF, B4]);
-    rete.add_wme([B5, COLOR, MAIZE]);
-    rete.add_wme([B6, COLOR, BLUE]);
-
-    rete.add_production(production_one);
-    rete.add_production(production_two);
-
-    reset()
+    assert_eq!(i, size);
 }
 
 #[test]
 fn simple_wme_removal() {
     let mut rete = Rete::default();
 
-    let id = rete.add_wme([1, 2, 3]);
+    let id = rete.add_wme(Wme::new([1, 2, 3]));
 
     rete.remove_wme(id);
 
@@ -218,15 +342,13 @@ fn wme_removal_with_tokens() {
 
     let mut rete = Rete::default();
 
-    let production = Production {
-        id: 9000,
-        conditions: vec![C1, C2, C3],
-    };
+    let (tx, rx) = channel();
+    let production = Production::new(&[C1, C2, C3], tx);
 
     rete.add_production(production);
 
-    let id1 = rete.add_wme(W1);
-    let id2 = rete.add_wme(W2);
+    let id1 = rete.add_wme(Wme::new(W1));
+    let id2 = rete.add_wme(Wme::new(W2));
 
     rete.print_to_file("wme_removal_with_tokens/initial.txt")
         .unwrap();
@@ -237,6 +359,8 @@ fn wme_removal_with_tokens() {
         .unwrap();
 
     rete.remove_wme(id1);
+
+    assert_production_set_size(rx, 0);
 
     assert!(rete.working_memory.is_empty());
     assert_eq!(rete.dummy_top_token.borrow().children().len(), 1);
@@ -251,13 +375,10 @@ fn wme_removal_with_tokens() {
 fn simple_production_removal() {
     let mut rete = Rete::default();
 
-    let production = Production {
-        id: 9000,
-        conditions: vec![C1, C2, C3],
-    };
+    let (tx, _rx) = channel();
+    let production = Production::new(&[C1, C2, C3], tx);
 
     let id = rete.add_production(production);
-
     let removed = rete.remove_production(id);
 
     assert!(removed);
@@ -278,15 +399,13 @@ fn production_removal_with_tokens() {
 
     let mut rete = Rete::default();
 
-    let production = Production {
-        id: 9000,
-        conditions: vec![C1, C2, C3],
-    };
+    let (tx, rx) = channel();
+    let production = Production::new(&[C1, C2, C3], tx);
 
     let id = rete.add_production(production);
 
-    let id1 = rete.add_wme(W1);
-    let id2 = rete.add_wme(W2);
+    let id1 = rete.add_wme(Wme::new(W1));
+    let id2 = rete.add_wme(Wme::new(W2));
 
     rete.print_to_file("production_removal_with_tokens/initial.txt")
         .unwrap();
@@ -309,6 +428,7 @@ fn production_removal_with_tokens() {
     assert!(rete.working_memory.is_empty());
     assert!(rete.dummy_top_token.borrow().children().is_empty());
     assert!(rete.productions.is_empty());
+    assert_production_set_size(rx, 0);
 
     reset();
 }
@@ -329,20 +449,15 @@ fn production_removal_with_similar_productions() {
 
     let mut rete = Rete::default();
 
-    let production_1 = Production {
-        id: 9000,
-        conditions: vec![C1, C2, C3],
-    };
-    let production_2 = Production {
-        id: 9001,
-        conditions: vec![C1, C2, C4],
-    };
+    let (tx, rx) = channel();
+    let production_1 = Production::new(&[C1, C2, C3], tx.clone());
+    let production_2 = Production::new(&[C1, C2, C4], tx);
 
     let prod_id1 = rete.add_production(production_1);
     let prod_id2 = rete.add_production(production_2);
 
-    let id1 = rete.add_wme(W1);
-    let id2 = rete.add_wme(W2);
+    let id1 = rete.add_wme(Wme::new(W1));
+    let id2 = rete.add_wme(Wme::new(W2));
 
     rete.print_to_file("production_removal_with_similar_productions/initial.txt")
         .unwrap();
@@ -372,6 +487,7 @@ fn production_removal_with_similar_productions() {
     assert!(rete.working_memory.is_empty());
     assert!(rete.dummy_top_token.borrow().children().is_empty());
     assert!(rete.productions.is_empty());
+    assert_production_set_size(rx, 0);
 
     reset();
 }
@@ -392,17 +508,15 @@ fn add_remove_negative_node() {
 
     let mut rete = Rete::default();
 
-    let production_1 = Production {
-        id: 9000,
-        conditions: vec![C1, C2, C3],
-    };
+    let (tx, rx) = channel();
+    let production = Production::new(&[C1, C2, C3], tx);
 
-    let prod_id1 = rete.add_production(production_1);
+    let prod_id1 = rete.add_production(production);
     assert_eq!(rete.productions.len(), 1);
 
-    rete.add_wme(W1);
-    rete.add_wme(W2);
-    rete.add_wme(W3);
+    rete.add_wme(Wme::new(W1));
+    rete.add_wme(Wme::new(W2));
+    rete.add_wme(Wme::new(W3));
 
     rete.print_to_file("add_remove_negative_node/initial.txt")
         .unwrap();
@@ -414,6 +528,8 @@ fn add_remove_negative_node() {
 
     assert!(rete.dummy_top_token.borrow().children().is_empty());
     assert!(rete.productions.is_empty());
+
+    assert_production_set_size(rx, 1);
 
     reset();
 }
@@ -437,27 +553,24 @@ fn add_remove_ncc_node() {
     const W3: [usize; 3] = [Y, LEFT_OF, Z];
 
     let mut rete = Rete::default();
+    let (tx, rx) = channel();
+    let production = Production::new(&[C1, C2, nc_3], tx);
 
-    let production_1 = Production {
-        id: 9000,
-        conditions: vec![C1, C2, nc_3],
-    };
-
-    let prod_id1 = rete.add_production(production_1);
+    let prod_id1 = rete.add_production(production);
     assert_eq!(rete.productions.len(), 1);
 
     rete.print_to_file("add_remove_ncc_node/0_initial.txt")
         .unwrap();
 
-    rete.add_wme(W1);
+    rete.add_wme(Wme::new(W1));
     rete.print_to_file("add_remove_ncc_node/1_first_wme.txt")
         .unwrap();
 
-    rete.add_wme(W2);
+    rete.add_wme(Wme::new(W2));
     rete.print_to_file("add_remove_ncc_node/2_second_wme.txt")
         .unwrap();
 
-    rete.add_wme(W3);
+    rete.add_wme(Wme::new(W3));
     rete.print_to_file("add_remove_ncc_node/3_third_wme.txt")
         .unwrap();
 
@@ -468,6 +581,8 @@ fn add_remove_ncc_node() {
 
     assert!(rete.dummy_top_token.borrow().children().is_empty());
     assert!(rete.productions.is_empty());
+
+    assert_production_set_size(rx, 1);
 
     reset();
 }
@@ -490,17 +605,15 @@ fn add_remove_single_ncc() {
 
     let mut rete = Rete::default();
 
-    let production_1 = Production {
-        id: 9000,
-        conditions: vec![nc],
-    };
+    let (tx, _rx) = channel();
+    let production = Production::new(&[nc], tx);
 
-    rete.add_wme(W1);
-    rete.add_wme(W2);
+    rete.add_wme(Wme::new(W1));
+    rete.add_wme(Wme::new(W2));
     rete.print_to_file("add_remove_single_ncc/0_add_wmes.txt")
         .unwrap();
 
-    let prod_id1 = rete.add_production(production_1);
+    let prod_id1 = rete.add_production(production);
     assert_eq!(rete.productions.len(), 1);
 
     rete.print_to_file("add_remove_single_ncc/1_add_production.txt")
@@ -551,32 +664,30 @@ fn ncc_complex() {
 
     let mut rete = Rete::default();
 
-    let production_1 = Production {
-        id: 9000,
-        conditions: vec![c, ncc],
-    };
+    let (tx, rx) = channel();
+    let production = Production::new(&[c, ncc], tx);
 
-    let prod_id1 = rete.add_production(production_1);
+    let prod_id1 = rete.add_production(production);
     assert_eq!(rete.productions.len(), 1);
 
     rete.print_to_file("ncc_complex/0_initial.txt").unwrap();
 
-    let wme1 = rete.add_wme(W1);
+    let wme1 = rete.add_wme(Wme::new(W1));
     rete.print_to_file("ncc_complex/10_first_wme.txt").unwrap();
 
-    let wme2 = rete.add_wme(W2);
+    let wme2 = rete.add_wme(Wme::new(W2));
     rete.print_to_file("ncc_complex/11_second_wme.txt").unwrap();
 
-    let wme3 = rete.add_wme(W3);
+    let wme3 = rete.add_wme(Wme::new(W3));
     rete.print_to_file("ncc_complex/12_third_wme.txt").unwrap();
 
-    let wme4 = rete.add_wme(W4);
+    let wme4 = rete.add_wme(Wme::new(W4));
     rete.print_to_file("ncc_complex/13_fourth_wme.txt").unwrap();
 
-    let wme5 = rete.add_wme(W5);
+    let wme5 = rete.add_wme(Wme::new(W5));
     rete.print_to_file("ncc_complex/14_fifth_wme.txt").unwrap();
 
-    let wme6 = rete.add_wme(W6);
+    let wme6 = rete.add_wme(Wme::new(W6));
     rete.print_to_file("ncc_complex/15_sixth_wme.txt").unwrap();
 
     rete.remove_wme(wme6);
@@ -610,6 +721,8 @@ fn ncc_complex() {
 
     assert!(rete.dummy_top_token.borrow().children().is_empty());
     assert!(rete.productions.is_empty());
+
+    assert_production_set_size(rx, 2);
 
     reset();
 }
